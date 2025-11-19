@@ -10,6 +10,9 @@ console.log("Loaded DATABASE_URL:", process.env.DATABASE_URL);
 import authRoutes from "./routes/authRoutes.js";
 import protectedRoutes from "./routes/protectedRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
+import adminProductRoutes from "./adminProductRoutes.js";
+import productCatalogRoutes from "./productCatalogRoutes.js";
+import adminProductRoutes from "./adminProductRoutes.js";
 
 const app = express();
 
@@ -29,6 +32,12 @@ app.use("/api/auth", authRoutes);
 app.use("/api", protectedRoutes);
 app.use("/api/admin", adminRoutes);
 
+
+router.use("/admin", adminProductRoutes);
+router.use("/products", productCatalogRoutes);
+router.use("/admin", adminProductRoutes);
+
+
 // REMOVE THIS — it conflicts with authRoutes 2FA
 // ❌ app.use("/api/2fa", twoFactorRoutes);
 
@@ -41,3 +50,5 @@ app.listen(process.env.PORT || 4000, () => {
 });
 
 export default app;
+
+

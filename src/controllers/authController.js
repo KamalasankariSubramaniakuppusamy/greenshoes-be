@@ -4,7 +4,7 @@ import { query } from "../db/db.js";
 
 /**
  * =====================================
- *  CHECK IF EMAIL EXISTS (LIVE CHECK)
+ * CHECK EMAIL
  * =====================================
  */
 export const checkEmail = async (req, res) => {
@@ -19,24 +19,17 @@ export const checkEmail = async (req, res) => {
     return res.json({ exists: result.rows.length > 0 });
   } catch (err) {
     console.error("CHECK EMAIL ERROR:", err);
-    res.status(500).json({ error: "Internal server error checking email" });
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
 
 /**
  * =====================================
- *  REGISTER USER + TEMP TOKEN FOR 2FA
- * =====================================
- */
-/**
- * =====================================
- *  REGISTER USER + TEMP TOKEN FOR 2FA
+ * REGISTER USER
  * =====================================
  */
 export const register = async (req, res) => {
-  console.log(">>> REGISTER CONTROLLER LOADED FROM:", import.meta.url);
-
   try {
     const { fullName, email, password } = req.body;
 
@@ -44,7 +37,6 @@ export const register = async (req, res) => {
       return res.status(400).json({ error: "All fields are required." });
     }
 
-    // Check existing
     const existing = await query(
       `SELECT id FROM users WHERE email = $1 LIMIT 1`,
       [email]
@@ -54,68 +46,39 @@ export const register = async (req, res) => {
       return res.status(409).json({ error: "User already exists." });
     }
 
-    // Hash password
     const hashed = await bcrypt.hash(password, 12);
 
-    // Insert user
     const result = await query(
       `INSERT INTO users (full_name, email, password_hash, role)
        VALUES ($1, $2, $3, 'CUSTOMER')
-       RETURNING id, full_name, email, role, created_at`,
+       RETURNING id, full_name, email, role`,
       [fullName, email, hashed]
     );
 
     const user = result.rows[0];
 
-    // Disable 2FA by default
-    await query(
-      `UPDATE users SET twofa_enabled = false WHERE id = $1`,
-      [user.id]
-    );
-
-    // Normal session token
     const token = jwt.sign(
       { id: user.id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
 
-    // Generate TEMP TOKEN for 2FA setup
-    const tempToken = jwt.sign(
-      { id: user.id, setup2fa: true },
-      process.env.JWT_SECRET,
-      { expiresIn: "10m" }
-    );
-
-    console.log("TEMP TOKEN SENT →", tempToken);
-
     return res.status(201).json({
       message: "Registration successful.",
       user,
-      token,
-      tempToken
+      token
     });
 
-//   } catch (err) {
-//     console.error("REGISTER ERROR:", err);
-//     res.status(500).json({ error: "Internal server error." });
-//   }
-// };
-
-} catch (err) {
-  console.error("🔥 REAL REGISTER ERROR:", err.stack || err);
-  return res.status(500).json({
-    error: "Internal server error.",
-    details: err.message,
-  });
-}
-
-
+  } catch (err) {
+    console.error("REGISTER ERROR:", err);
+    res.status(500).json({ error: "Internal server error." });
+  }
+};
 
 
 /**
  * =====================================
- *  LOGIN
+ * LOGIN
  * =====================================
  */
 export const login = async (req, res) => {
@@ -123,7 +86,7 @@ export const login = async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password)
-      return res.status(400).json({ error: "Email and password are required." });
+      return res.status(400).json({ error: "Email and password required." });
 
     const result = await query(
       `SELECT id, full_name, email, password_hash, role 
@@ -136,19 +99,16 @@ export const login = async (req, res) => {
 
     const user = result.rows[0];
 
-    // Password match?
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok)
       return res.status(401).json({ error: "Invalid password." });
 
-    // Normal login JWT
     const token = jwt.sign(
       { id: user.id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
 
-    // Frontend uses this to proceed to 2FA or dashboard
     return res.json({
       message: "Login successful.",
       user: {
@@ -166,9 +126,10 @@ export const login = async (req, res) => {
   }
 };
 
+
 /**
  * =====================================
- *  FORGOT PASSWORD (OTP FLOW)
+ * FORGOT PASSWORD (OPTIONAL)
  * =====================================
  */
 export const forgotPassword = async (req, res) => {
@@ -185,7 +146,6 @@ export const forgotPassword = async (req, res) => {
 
     const userId = result.rows[0].id;
 
-    // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expires = new Date(Date.now() + 10 * 60 * 1000);
 
@@ -199,8 +159,8 @@ export const forgotPassword = async (req, res) => {
 
     return res.json({
       success: true,
-      message: "OTP generated — check Google Authenticator.",
-      otp // TEMP: only visible during dev
+      message: "OTP generated.",
+      otp // TEMP for dev
     });
 
   } catch (err) {
@@ -209,9 +169,10 @@ export const forgotPassword = async (req, res) => {
   }
 };
 
+
 /**
  * =====================================
- *  RESET PASSWORD (AFTER OTP)
+ * RESET PASSWORD (OPTIONAL)
  * =====================================
  */
 export const resetPassword = async (req, res) => {

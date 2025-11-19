@@ -8,7 +8,8 @@
     "dev": "node src/server.js",
     "test": "jest --runInBand",
     "seed:admin": "node src/seed/seedAdmin.js",
-    "seed:users": "node src/seed/seedUsers.js"
+    "seed:users": "node src/seed/seedUsers.js",
+    "seed:products": "node src/seed/seedProducts.js"
   },
   "keywords": [
     "greenshoes",
