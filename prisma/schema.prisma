@@ -1,0 +1,210 @@
+// ======================================================
+// Prisma Setup
+// ======================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ======================================================
+// ENUMS
+// ======================================================
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+// ======================================================
+// MODELS
+// ======================================================
+
+// -------------------------
+// USERS (Customers + Admins)
+// -------------------------
+model User {
+  id            String            @id @default(uuid())
+  email         String            @unique
+  password      String
+  fullName      String
+  role          UserRole          @default(CUSTOMER)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  // Addresses
+  addresses        Address[]
+  billingAddressId String?         @unique
+  billingAddress   Address?        @relation("BillingAddress", fields: [billingAddressId], references: [id])
+
+  // 2FA
+  totpSecret    TwoFactorSecret?
+
+  // Feature modules
+  wishlist      WishlistItem[]
+  cartItems     CartItem[]
+  orders        Order[]
+}
+
+// -------------------------
+// TOTP SECRET (2FA)
+// -------------------------
+model TwoFactorSecret {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  secret    String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+// -------------------------
+// ADDRESSES
+// -------------------------
+model Address {
+  id          String   @id @default(uuid())
+  userId      String
+  line1       String
+  line2       String?
+  city        String
+  state       String
+  postalCode  String
+  country     String
+  isDefault   Boolean  @default(false)
+
+  user           User     @relation(fields: [userId], references: [id])
+  billingUser    User?    @relation("BillingAddress")
+
+  // required back-relations for Orders
+  shippingOrders Order[]  @relation("OrderShippingAddr")
+  billingOrders  Order[]  @relation("OrderBillingAddr")
+}
+
+// -------------------------
+// PRODUCTS
+// -------------------------
+model Product {
+  id            String           @id @default(uuid())
+  name          String
+  description   String
+  price         Float
+  onSale        Boolean          @default(false)
+  salePrice     Float?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  // Environmental impact info (PDF requirement)
+  impactText      String?
+  impactScore     Float?
+  impactVideoUrl  String?
+
+  variants      ProductVariant[]
+  images        ProductImage[]
+  wishlist      WishlistItem[]
+}
+
+// -------------------------
+// PRODUCT IMAGES (Gallery)
+// -------------------------
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String
+  url       String
+
+  product   Product  @relation(fields: [productId], references: [id])
+}
+
+// -------------------------
+// PRODUCT VARIANTS
+// -------------------------
+model ProductVariant {
+  id         String   @id @default(uuid())
+  productId  String
+  size       String
+  color      String
+  stock      Int      @default(0)
+
+  product    Product  @relation(fields: [productId], references: [id])
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@unique([productId, size, color])
+}
+
+// -------------------------
+// WISHLIST ITEMS
+// -------------------------
+model WishlistItem {
+  id         String   @id @default(uuid())
+  userId     String
+  productId  String
+
+  user       User     @relation(fields: [userId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+
+  @@unique([userId, productId])
+}
+
+// -------------------------
+// CART ITEMS (Guest + User)
+// -------------------------
+model CartItem {
+  id             String          @id @default(uuid())
+  userId         String?
+  guestSessionId String?         // guest cart support
+  variantId      String
+  quantity       Int             @default(1)
+  addedAt        DateTime        @default(now())
+
+  user           User?           @relation(fields: [userId], references: [id])
+  variant        ProductVariant  @relation(fields: [variantId], references: [id])
+
+  @@unique([userId, variantId])
+  @@index([guestSessionId])
+}
+
+// -------------------------
+// ORDERS
+// -------------------------
+model Order {
+  id                String        @id @default(uuid())
+  userId            String
+  status            OrderStatus   @default(PENDING)
+  totalAmount       Float
+  createdAt         DateTime      @default(now())
+
+  shippingAddressId String
+  billingAddressId  String
+
+  user              User          @relation(fields: [userId], references: [id])
+  items             OrderItem[]
+
+  shippingAddress   Address       @relation("OrderShippingAddr", fields: [shippingAddressId], references: [id])
+  billingAddress    Address       @relation("OrderBillingAddr", fields: [billingAddressId], references: [id])
+}
+
+// -------------------------
+// ORDER ITEMS
+// -------------------------
+model OrderItem {
+  id         String          @id @default(uuid())
+  orderId    String
+  variantId  String
+  quantity   Int
+  price      Float
+
+  order      Order           @relation(fields: [orderId], references: [id])
+  variant    ProductVariant  @relation(fields: [variantId], references: [id])
+}
