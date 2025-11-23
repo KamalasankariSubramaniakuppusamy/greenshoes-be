@@ -3,43 +3,64 @@ import {
   adminCreateProduct,
   adminUpdateProduct,
   adminUpdateInventory,
-  adminDeleteProduct
+  adminDeleteProduct,
+  adminGetAllProducts,
+  adminGetSingleProduct
 } from "../controllers/adminProductController.js";
 
+import { upload } from "../middleware/uploadMiddleware.js";
 import { authMiddleware } from "../middleware/auth.js";
-import { roleMiddleware } from "../middleware/roleMiddleware.js";
+import { requireRole } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
 
-// CREATE
+// CREATE PRODUCT (With images + sizes per color)
 router.post(
-  "/products",
+  "/",
   authMiddleware,
-  roleMiddleware("ADMIN"),
+  requireRole("ADMIN"),
+  upload.array("images", 20),
   adminCreateProduct
 );
 
-// UPDATE
-router.put(
-  "/products/:id",
+// GET ALL PRODUCTS
+router.get(
+  "/",
   authMiddleware,
-  roleMiddleware("ADMIN"),
+  requireRole("ADMIN"),
+  adminGetAllProducts
+);
+
+// GET SINGLE PRODUCT DETAILS
+router.get(
+  "/:id",
+  authMiddleware,
+  requireRole("ADMIN"),
+  adminGetSingleProduct
+);
+
+// UPDATE MAIN PRODUCT DATA (with optional images and variants)
+router.put(
+  "/:id",
+  authMiddleware,
+  requireRole("ADMIN"),
+  upload.array("images", 20), 
   adminUpdateProduct
 );
 
-// UPDATE INVENTORY OF ONE VARIANT
+// UPDATE INVENTORY OF ONE VARIANT (color + size)
 router.patch(
-  "/products/:id/inventory",
+  "/:id/inventory",
   authMiddleware,
-  roleMiddleware("ADMIN"),
+  requireRole("ADMIN"),
   adminUpdateInventory
 );
 
-// DELETE
+// DELETE PRODUCT
 router.delete(
-  "/products/:id",
+  "/:id",
   authMiddleware,
-  roleMiddleware("ADMIN"),
+  requireRole("ADMIN"),
   adminDeleteProduct
 );
 

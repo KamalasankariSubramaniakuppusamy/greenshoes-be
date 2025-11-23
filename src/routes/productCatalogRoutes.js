@@ -1,14 +1,10 @@
 import express from "express";
-import {
-  getAllProducts,
-  getProductDetails,
-  getProductImagesByColor
-} from "../controllers/productCatalogController.js";
+import { getCatalog, getSingleProduct } from "../controllers/productCatalogController.js";
 
 const router = express.Router();
 
-router.get("/", getAllProducts);
-router.get("/:id", getProductDetails);
-router.get("/:id/gallery/:colorId", getProductImagesByColor);
+// PUBLIC — NO AUTH REQUIRED
+router.get("/", getCatalog);              
+router.get("/:id", getSingleProduct);     
 
 export default router;

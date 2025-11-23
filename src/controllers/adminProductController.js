@@ -1,332 +1,502 @@
 import { query } from "../db/db.js";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const MIN_COST_PRICE = 1999;
+const SHIPPING_FEE = 11.99;
 
-const IMAGES_BASE = path.join(__dirname, "../../public/images");
-
-const cleanName = (name) =>
-  name
-    .split(/[-_ ]+/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(" ");
-
-function validateProductFolder(category, folderName) {
-  const fullPath = path.join(IMAGES_BASE, category, folderName);
-  if (!fs.existsSync(fullPath)) {
-    throw new Error(`Folder does not exist: ${fullPath}`);
-  }
-  return fullPath;
+// ----------------------------------------------
+// Helper: Extract color from filename
+// ----------------------------------------------
+function extractColorFromFilename(filename) {
+  const parts = filename.toLowerCase().split("-");
+  // tiara-black-side.png → ["tiara", "black", "side.png"]
+  return parts.length >= 2 ? parts[1].trim() : null;
 }
 
-function extractColors(files, folderName) {
-  const colors = new Set();
-  files.forEach((file) => {
-    const prefix = folderName.toLowerCase();
-    if (file.toLowerCase().startsWith(prefix)) {
-      const parts = file.toLowerCase().replace(prefix + "-", "").split("-");
-      colors.add(parts[0]);
-    }
-  });
-  return [...colors];
+// ----------------------------------------------
+// Helper: Normalize product name
+// ----------------------------------------------
+function normalizeProductName(name) {
+  return name
+    .replace(/[-_]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function buildColorImageMap(files, folderName, category) {
-  const map = {};
+// ----------------------------------------------
+// DB Helper: Insert or fetch color
+// ----------------------------------------------
+async function getOrCreateColor(value) {
+  const existing = await query(`SELECT id FROM colors WHERE value=$1`, [value]);
+  if (existing.rows.length > 0) return existing.rows[0].id;
 
-  files.forEach((file) => {
-    const prefix = folderName.toLowerCase();
-    if (!file.toLowerCase().startsWith(prefix)) return;
-
-    const parts = file.toLowerCase().replace(prefix + "-", "").split("-");
-    const color = parts[0];
-
-    if (!map[color]) map[color] = [];
-    map[color].push(`/images/${category}/${folderName}/${file}`);
-  });
-
-  return map;
+  const result = await query(
+    `INSERT INTO colors (value) VALUES ($1) RETURNING id`,
+    [value]
+  );
+  return result.rows[0].id;
 }
 
-// ===============================================================
-// CREATE PRODUCT
-// ===============================================================
+// ----------------------------------------------
+// DB Helper: Insert or fetch size
+// ----------------------------------------------
+async function getOrCreateSize(sizeValue) {
+  const existing = await query(
+    `SELECT id FROM sizes WHERE value=$1`,
+    [sizeValue]
+  );
+  if (existing.rows.length > 0) return existing.rows[0].id;
+
+  const result = await query(
+    `INSERT INTO sizes (value) VALUES ($1) RETURNING id`,
+    [sizeValue]
+  );
+  return result.rows[0].id;
+}
+
+//
+// ============================================================
+//  CREATE PRODUCT 
+// ============================================================
+//
 export const adminCreateProduct = async (req, res) => {
   try {
-    const { name, category, cost_price, selling_price } = req.body;
+    const { name, description, category, cost_price, selling_price } = req.body;
 
-    const productName = cleanName(name);
-    const folderName = productName.replace(/ /g, "");
-
-    const dir = validateProductFolder(category, folderName);
-    const files = fs.readdirSync(dir);
-
-    const colors = extractColors(files, folderName);
-    const gallery = buildColorImageMap(files, folderName, category);
-
-    const p = await query(
-      `INSERT INTO products (name, category, cost_price, selling_price)
-       VALUES ($1,$2,$3,$4) RETURNING id`,
-      [productName, category, cost_price, selling_price]
-    );
-
-    const productId = p.rows[0].id;
-
-    // --- Colors ---
-    const colorIdMap = {};
-    for (const c of colors) {
-      let row = await query(`SELECT id FROM colors WHERE value=$1`, [c]);
-      if (row.rows.length === 0) {
-        row = await query(
-          `INSERT INTO colors (value) VALUES ($1) RETURNING id`,
-          [c]
-        );
-      }
-      colorIdMap[c] = row.rows[0].id;
-
-      await query(
-        `INSERT INTO product_colors (product_id,color_id)
-         VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-        [productId, colorIdMap[c]]
-      );
+    // Variants sent as JSON text (Postman form-data)
+    let variants;
+    try {
+      variants = JSON.parse(req.body.variants);
+    } catch {
+      return res.status(400).json({ error: "Invalid variants JSON format" });
     }
 
-    // --- Images ---
-    for (const [color, imgs] of Object.entries(gallery)) {
-      const cid = colorIdMap[color];
-      imgs.forEach(async (img, i) => {
-        await query(
-          `INSERT INTO product_images (product_id, color_id, image_url, priority)
-           VALUES ($1,$2,$3,$4)`,
-          [productId, cid, img, i + 1]
-        );
+    // Multer may populate `req.files` as an array (upload.array)
+    // or an object mapping fieldName→array (upload.fields). Normalize
+    // to a single array of file objects for the controller logic.
+    let images = [];
+    if (!req.files) images = [];
+    else if (Array.isArray(req.files)) images = req.files;
+    else images = Object.values(req.files).flat();
+
+    // ----------------------
+    // Validate Required Fields
+    // ----------------------
+    if (
+      !name ||
+      !description ||
+      !category ||
+      !cost_price ||
+      !selling_price ||
+      !Array.isArray(variants)
+    ) {
+      console.log("VALIDATION FAILED:");
+      console.log("name:", !!name, name);
+      console.log("description:", !!description, description);
+      console.log("category:", !!category, category);
+      console.log("cost_price:", !!cost_price, cost_price);
+      console.log("selling_price:", !!selling_price, selling_price);
+      console.log("variants is array:", Array.isArray(variants));
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    if (cost_price < MIN_COST_PRICE) {
+      return res.status(400).json({
+        error: `Cost price must be at least $${MIN_COST_PRICE}`,
       });
     }
 
-    // --- Sizes ---
-    const sizes = [
-      "5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11"
-    ];
-
-    const sizeIdMap = {};
-    for (const s of sizes) {
-      let row = await query(`SELECT id FROM sizes WHERE value=$1`, [s]);
-      if (row.rows.length === 0) {
-        row = await query(
-          `INSERT INTO sizes (value) VALUES ($1) RETURNING id`,
-          [s]
-        );
-      }
-      sizeIdMap[s] = row.rows[0].id;
-
-      await query(
-        `INSERT INTO product_sizes (product_id,size_id)
-         VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-        [productId, sizeIdMap[s]]
-      );
+    if (selling_price > cost_price) {
+      return res.status(400).json({
+        error: "Selling price cannot be greater than cost price",
+      });
     }
 
-    // --- Inventory ---
-    for (const color of colors) {
-      const cid = colorIdMap[color];
-      for (const size of sizes) {
-        const sid = sizeIdMap[size];
-        const qty = Math.floor(Math.random() * 26) + 5;
-        await query(
-          `INSERT INTO inventory (product_id,size_id,color_id,quantity)
-           VALUES ($1,$2,$3,$4)`,
-          [productId, sid, cid, qty]
-        );
-      }
-    }
+    // Determine price category
+    const price_category =
+      Number(selling_price) < Number(cost_price) ? "discount" : "normal";
 
-    res.status(201).json({
-      success: true,
-      message: "Product created.",
-      productId,
-    });
+    const normalizedName = normalizeProductName(name);
 
-  } catch (err) {
-    console.error("ADMIN CREATE PRODUCT ERROR:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-// ===============================================================
-// UPDATE PRODUCT (FULL)
-// ===============================================================
-export const adminUpdateProduct = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, category, cost_price, selling_price, tax_percent } = req.body;
-
-    const product = await query(`SELECT * FROM products WHERE id=$1`, [id]);
-    if (product.rows.length === 0)
-      return res.status(404).json({ error: "Not found." });
-
-    const productName = cleanName(name || product.rows[0].name);
-    const folderName = productName.replace(/ /g, "");
-    const newCategory = category || product.rows[0].category;
-
-    const dir = validateProductFolder(newCategory, folderName);
-    const files = fs.readdirSync(dir);
-
-    const colors = extractColors(files, folderName);
-    const gallery = buildColorImageMap(files, folderName, newCategory);
-
-    // --- Update base product data ---
-    await query(
-      `UPDATE products SET
-        name=$1, category=$2, cost_price=$3, selling_price=$4, tax_percent=$5
-       WHERE id=$6`,
+    // ----------------------
+    // Insert Product
+    // ----------------------
+    const productResult = await query(
+      `INSERT INTO products 
+         (name, description, category, cost_price, selling_price, price_category)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
       [
-        productName,
-        newCategory,
-        cost_price ?? product.rows[0].cost_price,
-        selling_price ?? product.rows[0].selling_price,
-        tax_percent ?? product.rows[0].tax_percent,
-        id
+        normalizedName,
+        description,
+        category,
+        cost_price,
+        selling_price,
+        price_category,
       ]
     );
 
-    // =============================
-    // Rebuild colors
-    // =============================
-    await query(`DELETE FROM product_colors WHERE product_id=$1`, [id]);
+    const product = productResult.rows[0];
 
-    const colorIdMap = {};
-    for (const c of colors) {
-      let row = await query(`SELECT id FROM colors WHERE value=$1`, [c]);
-      if (row.rows.length === 0) {
-        row = await query(
-          `INSERT INTO colors (value) VALUES ($1) RETURNING id`,
-          [c]
-        );
+    // ----------------------
+    // Process Variants + Images
+    // ----------------------
+
+    // Collect colors from variants
+    const variantColors = variants.map((v) => v.color.toLowerCase());
+
+    // Extract colors from images
+    const imageColors = images.map((img) =>
+      extractColorFromFilename(img.originalname)
+    );
+
+    // Validate: every image color must exist in variants
+    for (const imgColor of imageColors) {
+      if (!variantColors.includes(imgColor)) {
+        return res.status(400).json({
+          error: `Image color '${imgColor}' is not listed in variants[]`,
+        });
       }
-      colorIdMap[c] = row.rows[0].id;
-
-      await query(
-        `INSERT INTO product_colors (product_id,color_id)
-         VALUES ($1,$2)`,
-        [id, colorIdMap[c]]
-      );
     }
 
-    // =============================
-    // Rebuild images
-    // =============================
-    await query(`DELETE FROM product_images WHERE product_id=$1`, [id]);
+    // Now insert everything
+    for (const variant of variants) {
+      const colorName = variant.color.toLowerCase();
+      const sizeList = variant.sizes;
 
-    for (const [color, imgs] of Object.entries(gallery)) {
-      const cid = colorIdMap[color];
-      imgs.forEach(async (img, i) => {
+      const colorId = await getOrCreateColor(colorName);
+
+      // Link product → color
+      await query(
+        `INSERT INTO product_colors (product_id, color_id)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [product.id, colorId]
+      );
+
+      // Insert images for this color
+      for (const img of images) {
+        const colorFromFile = extractColorFromFilename(img.originalname);
+        if (colorFromFile === colorName) {
+          await query(
+            `INSERT INTO product_images (product_id, color_id, image_url)
+             VALUES ($1, $2, $3)`,
+            [product.id, colorId, `/images/${img.filename}`]
+          );
+        }
+      }
+
+      // Insert inventory with admin-provided quantities
+      for (const sizeObj of sizeList) {
+        // Support both old format (just string) and new format (object with quantity)
+        const sizeVal = typeof sizeObj === 'object' ? sizeObj.value : sizeObj;
+        const quantity = typeof sizeObj === 'object' ? sizeObj.quantity : 0;
+
+        const sizeId = await getOrCreateSize(sizeVal.toString());
+
         await query(
-          `INSERT INTO product_images (product_id,color_id,image_url,priority)
-           VALUES ($1,$2,$3,$4)`,
-          [id, cid, img, i + 1]
+          `INSERT INTO inventory (product_id, size_id, color_id, quantity)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT DO NOTHING`,
+          [product.id, sizeId, colorId, quantity]
         );
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Product created successfully",
+      product,
+    });
+  } catch (err) {
+    console.error("CREATE PRODUCT ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+//
+// ============================================================
+// UPDATE PRODUCT
+// ============================================================
+//
+export const adminUpdateProduct = async (req, res) => {
+  try {
+    const productId = req.params.id;
+    
+    console.log("=== UPDATE PRODUCT DEBUG ===");
+    console.log("Product ID:", productId);
+    console.log("Body:", req.body);
+    console.log("Files:", req.files?.length || 0);
+    console.log("===========================");
+    
+    const { name, description, category, cost_price, selling_price } = req.body;
+
+    // Parse variants if provided
+    let variants = null;
+    if (req.body.variants) {
+      try {
+        variants = JSON.parse(req.body.variants);
+      } catch {
+        return res.status(400).json({ error: "Invalid variants JSON format" });
+      }
+    }
+
+    // Get uploaded images
+    const images = req.files || [];
+
+    // Validate prices if provided
+    if (cost_price && cost_price < MIN_COST_PRICE) {
+      return res.status(400).json({
+        error: `Cost price must be ≥ ${MIN_COST_PRICE}`,
       });
     }
 
-    // =============================
-    // Sizes remain constant — only rebuild mapping
-    // =============================
-    const SIZES = [
-      "5","6","6.5","7","7.5","8","8.5","9","9.5","10","10.5","11"
-    ];
-
-    await query(`DELETE FROM product_sizes WHERE product_id=$1`, [id]);
-
-    const sizeIdMap = {};
-    for (const s of SIZES) {
-      let row = await query(`SELECT id FROM sizes WHERE value=$1`, [s]);
-      if (row.rows.length === 0) {
-        row = await query(
-          `INSERT INTO sizes (value) VALUES ($1) RETURNING id`,
-          [s]
-        );
-      }
-      sizeIdMap[s] = row.rows[0].id;
-
-      await query(
-        `INSERT INTO product_sizes (product_id,size_id)
-         VALUES ($1,$2)`,
-        [id, sizeIdMap[s]]
-      );
+    if (selling_price && cost_price && selling_price > cost_price) {
+      return res.status(400).json({
+        error: "Selling price cannot exceed cost price",
+      });
     }
 
-    // =============================
-    // Rebuild inventory
-    // =============================
-    await query(`DELETE FROM inventory WHERE product_id=$1`, [id]);
-
-    for (const color of colors) {
-      const cid = colorIdMap[color];
-
-      for (const size of SIZES) {
-        const sid = sizeIdMap[size];
-        const qty = Math.floor(Math.random() * 26) + 5;
-        await query(
-          `INSERT INTO inventory (product_id,size_id,color_id,quantity)
-           VALUES ($1,$2,$3,$4)`,
-          [id, sid, cid, qty]
-        );
-      }
+    // Update price category if prices are being updated
+    let price_category = null;
+    if (selling_price && cost_price) {
+      price_category = Number(selling_price) < Number(cost_price) ? "discount" : "normal";
     }
 
-    res.json({
-      success: true,
-      message: "Product updated successfully.",
-    });
+    // Normalize name if provided
+    const normalizedName = name ? normalizeProductName(name) : null;
 
-  } catch (err) {
-    console.error("ADMIN UPDATE PRODUCT ERROR:", err);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-// ===============================================================
-// UPDATE INVENTORY (ONE VARIANT)
-// ===============================================================
-export const adminUpdateInventory = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { size_id, color_id, quantity } = req.body;
-
-    await query(
-      `UPDATE inventory
-       SET quantity=$1
-       WHERE product_id=$2 AND size_id=$3 AND color_id=$4`,
-      [quantity, id, size_id, color_id]
+    // Update basic product info
+    const updated = await query(
+      `UPDATE products
+       SET name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           category = COALESCE($3, category),
+           cost_price = COALESCE($4, cost_price),
+           selling_price = COALESCE($5, selling_price),
+           price_category = COALESCE($6, price_category),
+           updated_at = NOW()
+       WHERE id=$7
+       RETURNING *`,
+      [normalizedName, description, category, cost_price, selling_price, price_category, productId]
     );
 
-    res.json({ success: true, message: "Inventory updated." });
+    if (updated.rows.length === 0) {
+      return res.status(404).json({ error: "Product not found" });
+    }
 
+    // If variants are provided, update colors and inventory
+    if (variants && Array.isArray(variants)) {
+      for (const variant of variants) {
+        const colorName = variant.color.toLowerCase();
+        const sizeList = variant.sizes;
+
+        const colorId = await getOrCreateColor(colorName);
+
+        // Link product → color (if not already linked)
+        await query(
+          `INSERT INTO product_colors (product_id, color_id)
+           VALUES ($1, $2)
+           ON CONFLICT DO NOTHING`,
+          [productId, colorId]
+        );
+
+        // Update or insert inventory for each size
+        for (const sizeVal of sizeList) {
+          const sizeId = await getOrCreateSize(sizeVal.toString());
+          
+          // Check if inventory exists
+          const existingInventory = await query(
+            `SELECT * FROM inventory 
+             WHERE product_id=$1 AND size_id=$2 AND color_id=$3`,
+            [productId, sizeId, colorId]
+          );
+
+          if (existingInventory.rows.length > 0) {
+            // Inventory exists, keep existing quantity
+            console.log(`Inventory exists for size ${sizeVal}, color ${colorName}`);
+          } else {
+            // Insert new inventory
+            const randomQty = Math.floor(Math.random() * 26) + 5;
+            await query(
+              `INSERT INTO inventory (product_id, size_id, color_id, quantity)
+               VALUES ($1, $2, $3, $4)`,
+              [productId, sizeId, colorId, randomQty]
+            );
+          }
+        }
+      }
+    }
+
+    // If images are provided, add them
+    if (images.length > 0) {
+      // Get variant colors to validate images
+      let variantColors = [];
+      if (variants && Array.isArray(variants)) {
+        variantColors = variants.map((v) => v.color.toLowerCase());
+      } else {
+        // If no variants provided, get existing colors from DB
+        const existingColors = await query(
+          `SELECT c.value FROM product_colors pc
+           JOIN colors c ON c.id = pc.color_id
+           WHERE pc.product_id=$1`,
+          [productId]
+        );
+        variantColors = existingColors.rows.map((row) => row.value.toLowerCase());
+      }
+
+      // Extract colors from images
+      const imageColors = images.map((img) =>
+        extractColorFromFilename(img.originalname)
+      );
+
+      // Validate: every image color must exist in variants
+      for (const imgColor of imageColors) {
+        if (!variantColors.includes(imgColor)) {
+          return res.status(400).json({
+            error: `Image color '${imgColor}' is not listed in variants[]`,
+          });
+        }
+      }
+
+      // Insert new images
+      for (const img of images) {
+        const colorFromFile = extractColorFromFilename(img.originalname);
+        const colorResult = await query(
+          `SELECT id FROM colors WHERE value=$1`,
+          [colorFromFile]
+        );
+        
+        if (colorResult.rows.length > 0) {
+          const colorId = colorResult.rows[0].id;
+          await query(
+            `INSERT INTO product_images (product_id, color_id, image_url)
+             VALUES ($1, $2, $3)`,
+            [productId, colorId, `/images/${img.filename}`]
+          );
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: "Product updated successfully",
+      product: updated.rows[0],
+    });
   } catch (err) {
-    console.error("ADMIN UPDATE INVENTORY ERROR:", err);
-    res.status(500).json({ error: err.message });
+    console.error("UPDATE PRODUCT ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+//
+// ============================================================
+// UPDATE INVENTORY — ONE COLOR + ONE SIZE
+// ============================================================
+//
+export const adminUpdateInventory = async (req, res) => {
+  try {
+    const { id } = req.params; // productId
+    const { sizeId, colorId, quantity } = req.body;
+
+    const updated = await query(
+      `UPDATE inventory
+       SET quantity=$1
+       WHERE product_id=$2 AND size_id=$3 AND color_id=$4
+       RETURNING *`,
+      [quantity, id, sizeId, colorId]
+    );
+
+    if (updated.rows.length === 0)
+      return res.status(404).json({ error: "Variant not found" });
+
+    return res.json({
+      success: true,
+      message: "Inventory updated",
+      variant: updated.rows[0],
+    });
+  } catch (err) {
+    console.error("UPDATE INVENTORY ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 };
 
-// ===============================================================
+//
+// ============================================================
 // DELETE PRODUCT
-// ===============================================================
+// ============================================================
+//
 export const adminDeleteProduct = async (req, res) => {
   try {
     const { id } = req.params;
 
     await query(`DELETE FROM products WHERE id=$1`, [id]);
 
-    res.json({
-      success: true,
-      message: "Product deleted.",
-    });
-
+    return res.json({ success: true, message: "Product deleted" });
   } catch (err) {
-    console.error("ADMIN DELETE PRODUCT ERROR:", err);
-    res.status(500).json({ error: err.message });
+    console.error("DELETE PRODUCT ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+//
+// ============================================================
+// GET ALL PRODUCTS
+// ============================================================
+//
+export const adminGetAllProducts = async (req, res) => {
+  try {
+    const result = await query(`SELECT * FROM products ORDER BY created_at DESC`);
+    return res.json({ success: true, products: result.rows });
+  } catch (err) {
+    console.error("GET ALL PRODUCTS ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+//
+// ============================================================
+// GET SINGLE PRODUCT (FULL VARIANT DETAILS)
+// ============================================================
+//
+export const adminGetSingleProduct = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const product = await query(`SELECT * FROM products WHERE id=$1`, [id]);
+    if (product.rows.length === 0)
+      return res.status(404).json({ error: "Product not found" });
+
+    const colors = await query(
+      `SELECT c.id, c.value
+         FROM product_colors pc
+         JOIN colors c ON c.id = pc.color_id
+       WHERE pc.product_id=$1`,
+      [id]
+    );
+
+    const inventory = await query(
+      `SELECT i.id, i.size_id, i.color_id, i.quantity, s.value AS size
+         FROM inventory i
+         JOIN sizes s ON s.id = i.size_id
+       WHERE i.product_id=$1`,
+      [id]
+    );
+
+    const images = await query(
+      `SELECT * FROM product_images WHERE product_id=$1 ORDER BY priority ASC`,
+      [id]
+    );
+
+    return res.json({
+      success: true,
+      product: product.rows[0],
+      colors: colors.rows,
+      variants: inventory.rows,
+      images: images.rows,
+    });
+  } catch (err) {
+    console.error("GET SINGLE PRODUCT ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 };

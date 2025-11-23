@@ -5,50 +5,62 @@ import morgan from "morgan";
 import dotenv from "dotenv";
 dotenv.config();
 
-console.log("Loaded DATABASE_URL:", process.env.DATABASE_URL);
-
 import authRoutes from "./routes/authRoutes.js";
 import protectedRoutes from "./routes/protectedRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
-import adminProductRoutes from "./adminProductRoutes.js";
-import productCatalogRoutes from "./productCatalogRoutes.js";
-import adminProductRoutes from "./adminProductRoutes.js";
+import adminProductRoutes from "./routes/adminProductRoutes.js";
+import productCatalogRoutes from "./routes/productCatalogRoutes.js";
+import cartRoutes from "./routes/cartRoutes.js";
+import wishlistRoutes from "./routes/wishlistRoutes.js";
+import catalogRoutes from "./routes/catalogRoutes.js";
 
 const app = express();
 
-// 🟢 CORS + body parsers MUST come first
+// ----------------------
+// GLOBAL MIDDLEWARE
+// ----------------------
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// 🟢 Helmet MUST come AFTER parsers
+app.use(express.json({ limit: '10mb' })); // Increased limit for large payloads
+app.use(express.urlencoded({ extended: true, limit: '10mb' })); // Increased limit
 app.use(helmet());
-
-// Debug
 app.use(morgan("dev"));
 
-// API routes
+// ----------------------
+// USER + AUTH
+// ----------------------
 app.use("/api/auth", authRoutes);
 app.use("/api", protectedRoutes);
-app.use("/api/admin", adminRoutes);
 
+// ----------------------
+// ADMIN
+// ----------------------
+app.use("/api/admin/products", adminProductRoutes); // More specific first!
+app.use("/api/admin", adminRoutes);  
 
-router.use("/admin", adminProductRoutes);
-router.use("/products", productCatalogRoutes);
-router.use("/admin", adminProductRoutes);
+// ----------------------
+// CUSTOMER PRODUCT CATALOG
+// ----------------------
+app.use("/api/products", productCatalogRoutes);  // Product list + details
+app.use("/api/catalog", catalogRoutes);          // Full catalog with images
 
+// ----------------------
+// CART + WISHLIST
+// ----------------------
+app.use("/api/cart", cartRoutes);
+app.use("/api/wishlist", wishlistRoutes);
 
-// REMOVE THIS — it conflicts with authRoutes 2FA
-// ❌ app.use("/api/2fa", twoFactorRoutes);
-
+// ----------------------
+// ROOT
+// ----------------------
 app.get("/", (req, res) => {
   res.json({ message: "GreenShoes API is running..." });
 });
 
+// ----------------------
+// SERVER
+// ----------------------
 app.listen(process.env.PORT || 4000, () => {
   console.log(`Server running at http://localhost:${process.env.PORT}`);
 });
 
 export default app;
-
-
