@@ -32,7 +32,9 @@ export const checkEmail = async (req, res) => {
  */
 export const register = async (req, res) => {
   try {
-    const { fullName, email, password } = req.body;
+    const fullName = req.body.fullName || req.body.full_name;
+    const email = req.body.email;
+    const password = req.body.password;
 
     if (!fullName || !email || !password) {
       return res.status(400).json({ error: "All fields are required." });
@@ -76,7 +78,6 @@ export const register = async (req, res) => {
     return res.status(500).json({ error: "Internal server error." });
   }
 };
-
 
 /**
  * =====================================

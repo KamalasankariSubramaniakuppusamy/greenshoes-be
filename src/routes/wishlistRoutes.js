@@ -1,20 +1,24 @@
 import express from "express";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddlewareOptional } from "../middleware/auth.js";
 import {
   getWishlist,
   addToWishlist,
-  removeFromWishlist
+  removeFromWishlist,
+  moveWishlistToCart
 } from "../controllers/wishlistController.js";
 
 const router = express.Router();
 
-// Get wishlist (requires login)
-router.get("/", authMiddleware, getWishlist);
+// GET WISHLIST (guest OR registered)
+router.get("/", authMiddlewareOptional, getWishlist);
 
-// Add to wishlist
-router.post("/add", authMiddleware, addToWishlist);
+// ADD TO WISHLIST (guest OR registered)
+router.post("/add", authMiddlewareOptional, addToWishlist);
 
-// Remove from wishlist
-router.delete("/remove/:productId", authMiddleware, removeFromWishlist);
+// REMOVE FROM WISHLIST (guest OR registered)
+router.delete("/:productId", authMiddlewareOptional, removeFromWishlist);
+
+// MOVE WISHLIST → CART (guest OR registered)
+router.post("/move-to-cart/:productId", authMiddlewareOptional, moveWishlistToCart);
 
 export default router;

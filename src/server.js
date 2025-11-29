@@ -14,6 +14,13 @@ import cartRoutes from "./routes/cartRoutes.js";
 import wishlistRoutes from "./routes/wishlistRoutes.js";
 import catalogRoutes from "./routes/catalogRoutes.js";
 
+// NEW IMPORTS - Add these lines
+import addressRoutes from "./routes/addressRoutes.js";
+import paymentCardRoutes from "./routes/paymentCardRoutes.js";
+import checkoutRoutes from "./routes/checkoutRoutes.js";
+import orderRoutes from "./routes/orderRoutes.js";
+import adminOrderRoutes from "./routes/adminOrderRoutes.js";
+
 const app = express();
 
 // ----------------------
@@ -35,6 +42,7 @@ app.use("/api", protectedRoutes);
 // ADMIN
 // ----------------------
 app.use("/api/admin/products", adminProductRoutes); // More specific first!
+app.use("/api/admin/orders", adminOrderRoutes);     // NEW - Admin orders
 app.use("/api/admin", adminRoutes);  
 
 // ----------------------
@@ -48,6 +56,14 @@ app.use("/api/catalog", catalogRoutes);          // Full catalog with images
 // ----------------------
 app.use("/api/cart", cartRoutes);
 app.use("/api/wishlist", wishlistRoutes);
+
+// ----------------------
+// CHECKOUT & ORDERS - NEW SECTION
+// ----------------------
+app.use("/api/addresses", addressRoutes);
+app.use("/api/payment-cards", paymentCardRoutes);
+app.use("/api/checkout", checkoutRoutes);
+app.use("/api/orders", orderRoutes);
 
 // ----------------------
 // ROOT

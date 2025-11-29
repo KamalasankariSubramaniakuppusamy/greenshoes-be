@@ -6,18 +6,18 @@ import { query } from "../db/db.js";
 
 async function seedAdmin() {
   try {
-    console.log("🌱 Checking for existing admin...");
+    console.log("Checking for existing admin...");
 
     const exists = await query(
       `SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1`
     );
 
     if (exists.rows.length > 0) {
-      console.log("⚠️ Admin already exists:", exists.rows[0].id);
+      console.log("Admin already exists:", exists.rows[0].id);
       return;
     }
 
-    console.log("🌱 Creating admin user...");
+    console.log("Creating admin user...");
 
     const hashed = await bcrypt.hash("Admin@123", 12);
 
@@ -28,10 +28,10 @@ async function seedAdmin() {
       ["GreenShoes Admin", "admin@greenshoes.com", hashed]
     );
 
-    console.log("✅ Admin created:", result.rows[0]);
+    console.log("Admin created:", result.rows[0]);
 
   } catch (err) {
-    console.error("❌ Error seeding admin:", err);
+    console.error("Error seeding admin:", err);
   } finally {
     process.exit(0);
   }

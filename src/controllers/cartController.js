@@ -13,6 +13,19 @@ async function getOrCreateGuestCart(req) {
     guestId = newGuest.rows[0].id;
   }
 
+  // Check if guest exists, if not create
+  const guestCheck = await query(
+    `SELECT id FROM guest_users WHERE id=$1`,
+    [guestId]
+  );
+
+  if (guestCheck.rows.length === 0) {
+    await query(
+      `INSERT INTO guest_users (id) VALUES ($1)`,
+      [guestId]
+    );
+  }
+
   let cart = await query(`SELECT id FROM carts WHERE guest_id=$1`, [guestId]);
 
   if (cart.rows.length === 0) {
@@ -156,7 +169,7 @@ export const getCart = async (req, res) => {
       guestId = result.guestId;
     }
 
-    // Get cart items with product details
+    // Get cart items with product details (including sale prices)
     const items = await query(
       `SELECT 
         ci.id as cart_item_id,
@@ -164,14 +177,17 @@ export const getCart = async (req, res) => {
         ci.product_id,
         p.name,
         p.selling_price,
+        p.on_sale,
+        p.sale_price,
         p.description,
         c.value AS color,
         c.id AS color_id,
         s.value AS size,
         s.id AS size_id,
+        i.id AS inventory_id,
         i.quantity AS available_stock,
         (SELECT image_url FROM product_images 
-         WHERE product_id = p.id AND color_id = c.id 
+         WHERE product_id = p.id 
          ORDER BY priority LIMIT 1) as image_url
       FROM cart_items ci
       JOIN products p ON p.id = ci.product_id
@@ -201,24 +217,31 @@ export const getCart = async (req, res) => {
          FROM inventory i
          JOIN sizes s ON s.id = i.size_id
          WHERE i.product_id=$1 AND i.color_id=$2
-         ORDER BY s.value::float`,
+         ORDER BY s.value`,
         [item.product_id, item.color_id]
       );
 
+      // Calculate effective price (use sale price if on sale)
+      const effectivePrice = item.on_sale && item.sale_price 
+        ? parseFloat(item.sale_price) 
+        : parseFloat(item.selling_price);
+
       enhancedItems.push({
         ...item,
+        effective_price: effectivePrice.toFixed(2),
+        line_total: (effectivePrice * item.quantity).toFixed(2),
         available_colors: availableColors.rows,
         available_sizes: availableSizes.rows
       });
     }
 
-    // Calculate totals
+    // Calculate totals (using effective prices)
     const subtotal = enhancedItems.reduce((sum, item) => {
-      return sum + (parseFloat(item.selling_price) * item.quantity);
+      return sum + parseFloat(item.line_total);
     }, 0);
 
     const tax = subtotal * 0.06; // 6% tax
-    const shipping = 11.99;
+    const shipping = 11.95; // FIXED: $11.95 per requirements
     const total = subtotal + tax + shipping;
 
     return res.json({
@@ -241,70 +264,22 @@ export const getCart = async (req, res) => {
 };
 
 // ---------------------------------------------------
-// UPDATE CART ITEM QUANTITY
-// ---------------------------------------------------
-export const updateCartItemQuantity = async (req, res) => {
-  try {
-    const { itemId } = req.params;
-    const { quantity } = req.body;
-
-    if (quantity === undefined || quantity < 1) {
-      return res.status(400).json({ 
-        error: "Quantity must be at least 1. Use DELETE to remove item." 
-      });
-    }
-
-    // Check if item exists and get stock
-    const existing = await query(
-      `SELECT ci.id, ci.quantity, i.quantity as available_stock
-       FROM cart_items ci
-       JOIN inventory i ON i.id = ci.inventory_id
-       WHERE ci.id=$1`,
-      [itemId]
-    );
-
-    if (existing.rows.length === 0) {
-      return res.status(404).json({ error: "Cart item not found" });
-    }
-
-    // Check stock availability
-    if (quantity > existing.rows[0].available_stock) {
-      return res.status(400).json({ 
-        error: `Only ${existing.rows[0].available_stock} items available in stock` 
-      });
-    }
-
-    // Update quantity
-    await query(
-      `UPDATE cart_items SET quantity=$1 WHERE id=$2`,
-      [quantity, itemId]
-    );
-
-    return res.json({
-      success: true,
-      message: "Cart updated"
-    });
-
-  } catch (err) {
-    console.error("UPDATE CART QUANTITY ERROR:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-};
-
-// ---------------------------------------------------
 // INCREASE QUANTITY (+1)
 // ---------------------------------------------------
 export const increaseQuantity = async (req, res) => {
   try {
     const { itemId } = req.params;
+    const userId = req.user?.id;
+    const guestId = req.headers["x-guest-id"];
 
-    // Get current quantity and stock
+    // Get current quantity and stock with ownership check
     const existing = await query(
       `SELECT ci.id, ci.quantity, i.quantity as available_stock
        FROM cart_items ci
        JOIN inventory i ON i.id = ci.inventory_id
-       WHERE ci.id=$1`,
-      [itemId]
+       JOIN carts c ON c.id = ci.cart_id
+       WHERE ci.id=$1 AND (c.user_id=$2 OR c.guest_id=$3)`,
+      [itemId, userId || null, guestId || null]
     );
 
     if (existing.rows.length === 0) {
@@ -344,11 +319,16 @@ export const increaseQuantity = async (req, res) => {
 export const decreaseQuantity = async (req, res) => {
   try {
     const { itemId } = req.params;
+    const userId = req.user?.id;
+    const guestId = req.headers["x-guest-id"];
 
-    // Get current quantity
+    // Get current quantity with ownership check
     const existing = await query(
-      `SELECT quantity FROM cart_items WHERE id=$1`,
-      [itemId]
+      `SELECT ci.quantity
+       FROM cart_items ci
+       JOIN carts c ON c.id = ci.cart_id
+       WHERE ci.id=$1 AND (c.user_id=$2 OR c.guest_id=$3)`,
+      [itemId, userId || null, guestId || null]
     );
 
     if (existing.rows.length === 0) {
@@ -359,8 +339,11 @@ export const decreaseQuantity = async (req, res) => {
     const newQty = currentQty - 1;
 
     if (newQty < 1) {
-      return res.status(400).json({ 
-        error: "Quantity cannot be less than 1. Use DELETE to remove item." 
+      // Remove item if quantity would be 0
+      await query(`DELETE FROM cart_items WHERE id=$1`, [itemId]);
+      return res.json({
+        success: true,
+        message: "Item removed from cart (quantity was 1)"
       });
     }
 
@@ -388,17 +371,20 @@ export const changeCartItemVariant = async (req, res) => {
   try {
     const { itemId } = req.params;
     const { color, size } = req.body;
+    const userId = req.user?.id;
+    const guestId = req.headers["x-guest-id"];
 
     if (!color || !size) {
       return res.status(400).json({ error: "Color and size are required" });
     }
 
-    // Get current cart item
+    // Get current cart item with ownership check
     const cartItem = await query(
       `SELECT ci.product_id, ci.quantity, ci.cart_id
        FROM cart_items ci
-       WHERE ci.id=$1`,
-      [itemId]
+       JOIN carts c ON c.id = ci.cart_id
+       WHERE ci.id=$1 AND (c.user_id=$2 OR c.guest_id=$3)`,
+      [itemId, userId || null, guestId || null]
     );
 
     if (cartItem.rows.length === 0) {
@@ -491,8 +477,23 @@ export const changeCartItemVariant = async (req, res) => {
 export const removeCartItem = async (req, res) => {
   try {
     const { itemId } = req.params;
+    const userId = req.user?.id;
+    const guestId = req.headers["x-guest-id"];
 
-    await query(`DELETE FROM cart_items WHERE id=$1`, [itemId]);
+    // Delete with ownership check
+    const result = await query(
+      `DELETE FROM cart_items ci
+       USING carts c
+       WHERE ci.cart_id = c.id
+         AND ci.id=$1 
+         AND (c.user_id=$2 OR c.guest_id=$3)
+       RETURNING ci.id`,
+      [itemId, userId || null, guestId || null]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Cart item not found" });
+    }
 
     res.json({
       success: true,
@@ -513,16 +514,21 @@ export const moveToWishlist = async (req, res) => {
     const userId = req.user.id;
     const { itemId } = req.params;
 
+    // Get cart item with ownership check
     const result = await query(
-      `SELECT product_id FROM cart_items WHERE id=$1 LIMIT 1`,
-      [itemId]
+      `SELECT ci.product_id 
+       FROM cart_items ci
+       JOIN carts c ON c.id = ci.cart_id
+       WHERE ci.id=$1 AND c.user_id=$2`,
+      [itemId, userId]
     );
 
     if (result.rows.length === 0)
-      return res.status(404).json({ error: "Item not found" });
+      return res.status(404).json({ error: "Cart item not found" });
 
     const productId = result.rows[0].product_id;
 
+    // Get or create wishlist
     let wishlist = await query(
       `SELECT id FROM wishlist WHERE user_id=$1`,
       [userId]
@@ -537,13 +543,15 @@ export const moveToWishlist = async (req, res) => {
 
     const wishlistId = wishlist.rows[0].id;
 
+    // Add to wishlist (prevent duplicates)
     await query(
       `INSERT INTO wishlist_items (wishlist_id, product_id)
        VALUES ($1, $2)
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT (wishlist_id, product_id) DO NOTHING`,
       [wishlistId, productId]
     );
 
+    // Remove from cart
     await query(`DELETE FROM cart_items WHERE id=$1`, [itemId]);
 
     res.json({

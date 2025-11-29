@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 
 const MIN_COST_PRICE = 1999;
-const SHIPPING_FEE = 11.99;
+const SHIPPING_FEE = 11.95; //flat shipping fee for all products according to the requirmetns doc.
 
 // ----------------------------------------------
 // Helper: Extract color from filename
@@ -114,7 +114,7 @@ export const adminCreateProduct = async (req, res) => {
       });
     }
 
-    // Determine price category
+    // Determine price category (YOUR LOGIC - KEPT)
     const price_category =
       Number(selling_price) < Number(cost_price) ? "discount" : "normal";
 
@@ -215,6 +215,7 @@ export const adminCreateProduct = async (req, res) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+
 //
 // ============================================================
 // UPDATE PRODUCT
@@ -389,6 +390,7 @@ export const adminUpdateProduct = async (req, res) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+
 //
 // ============================================================
 // UPDATE INVENTORY — ONE COLOR + ONE SIZE
@@ -497,6 +499,154 @@ export const adminGetSingleProduct = async (req, res) => {
     });
   } catch (err) {
     console.error("GET SINGLE PRODUCT ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+//
+// ============================================================
+// MARK PRODUCT AS ON SALE (NEW - HYBRID APPROACH)
+// ============================================================
+//
+export const markProductOnSale = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sale_price } = req.body;
+
+    if (!sale_price) {
+      return res.status(400).json({ error: "Sale price is required" });
+    }
+
+    // Get current product
+    const product = await query(
+      `SELECT selling_price FROM products WHERE id=$1`,
+      [id]
+    );
+
+    if (product.rows.length === 0) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    // Validate sale price is less than selling price
+    if (parseFloat(sale_price) >= parseFloat(product.rows[0].selling_price)) {
+      return res.status(400).json({ 
+        error: "Sale price must be less than regular selling price" 
+      });
+    }
+
+    // Mark as on sale
+    const result = await query(
+      `UPDATE products 
+       SET on_sale = TRUE, 
+           sale_price = $1,
+           updated_at = NOW()
+       WHERE id = $2
+       RETURNING *`,
+      [sale_price, id]
+    );
+
+    return res.json({
+      success: true,
+      message: "Product marked as on sale",
+      product: result.rows[0]
+    });
+
+  } catch (err) {
+    console.error("MARK ON SALE ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+//
+// ============================================================
+// REMOVE PRODUCT FROM SALE (NEW - HYBRID APPROACH)
+// ============================================================
+//
+export const removeProductFromSale = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await query(
+      `UPDATE products 
+       SET on_sale = FALSE, 
+           sale_price = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    return res.json({
+      success: true,
+      message: "Product removed from sale",
+      product: result.rows[0]
+    });
+
+  } catch (err) {
+    console.error("REMOVE FROM SALE ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+//
+// ============================================================
+// UPDATE ENVIRONMENTAL IMPACT DATA (NEW)
+// ============================================================
+//
+export const updateProductImpact = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      impact_story,
+      sustainability_rating,
+      carbon_footprint,
+      ethical_sourcing,
+      recycled_materials
+    } = req.body;
+
+    // Validate sustainability rating
+    if (sustainability_rating && (sustainability_rating < 1 || sustainability_rating > 5)) {
+      return res.status(400).json({ 
+        error: "Sustainability rating must be between 1 and 5" 
+      });
+    }
+
+    const result = await query(
+      `UPDATE products 
+       SET impact_story = COALESCE($1, impact_story),
+           sustainability_rating = COALESCE($2, sustainability_rating),
+           carbon_footprint = COALESCE($3, carbon_footprint),
+           ethical_sourcing = COALESCE($4, ethical_sourcing),
+           recycled_materials = COALESCE($5, recycled_materials),
+           updated_at = NOW()
+       WHERE id = $6
+       RETURNING *`,
+      [
+        impact_story,
+        sustainability_rating,
+        carbon_footprint,
+        ethical_sourcing,
+        recycled_materials,
+        id
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    return res.json({
+      success: true,
+      message: "Environmental impact data updated",
+      product: result.rows[0]
+    });
+
+  } catch (err) {
+    console.error("UPDATE IMPACT ERROR:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 };

@@ -1,9 +1,121 @@
 import { query } from "../db/db.js";
 
+// ---------------------------------------------------
+// GET FULL CATALOG (with search, filters, emphasis on sale)
+// REQUIREMENT: "Allow users to use filters and search words"
+// REQUIREMENT: "Emphasize 'on Sale' items in the landing page"
+// ---------------------------------------------------
 export const getFullCatalog = async (req, res) => {
   try {
-    const products = await query(`SELECT * FROM products ORDER BY created_at DESC`);
+    const {
+      category,
+      search,
+      minPrice,
+      maxPrice,
+      onSale,
+      sortBy = 'created_at',
+      sortOrder = 'DESC'
+    } = req.query;
 
+    // Build dynamic query with filters
+    let queryText = `
+      SELECT DISTINCT
+        p.id,
+        p.name,
+        p.description,
+        p.category,
+        p.cost_price,
+        p.selling_price,
+        p.on_sale,
+        p.sale_price,
+        p.price_category,
+        p.tax_percent,
+        p.created_at,
+        (SELECT image_url FROM product_images 
+         WHERE product_id = p.id 
+         ORDER BY priority ASC 
+         LIMIT 1) as main_image,
+        CASE 
+          WHEN SUM(inv.quantity) > 0 THEN 'in_stock'
+          ELSE 'out_of_stock'
+        END as status,
+        CASE 
+          WHEN p.on_sale = TRUE AND p.sale_price IS NOT NULL 
+          THEN p.sale_price 
+          ELSE p.selling_price 
+        END as effective_price,
+        CASE 
+          WHEN p.on_sale = TRUE AND p.sale_price IS NOT NULL 
+          THEN ROUND(((p.selling_price - p.sale_price) / p.selling_price) * 100)
+          ELSE NULL
+        END as discount_percentage
+      FROM products p
+      LEFT JOIN inventory inv ON inv.product_id = p.id
+      WHERE 1=1
+    `;
+
+    const params = [];
+    let paramIndex = 1;
+
+    // REQUIREMENT: Filter by category
+    if (category) {
+      queryText += ` AND p.category = $${paramIndex}`;
+      params.push(category);
+      paramIndex++;
+    }
+
+    // REQUIREMENT: Search by name or description
+    if (search) {
+      queryText += ` AND (p.name ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    // REQUIREMENT: Filter by price range
+    if (minPrice) {
+      queryText += ` AND COALESCE(p.sale_price, p.selling_price) >= $${paramIndex}`;
+      params.push(parseFloat(minPrice));
+      paramIndex++;
+    }
+
+    if (maxPrice) {
+      queryText += ` AND COALESCE(p.sale_price, p.selling_price) <= $${paramIndex}`;
+      params.push(parseFloat(maxPrice));
+      paramIndex++;
+    }
+
+    // REQUIREMENT: Filter by on sale items
+    if (onSale === 'true') {
+      queryText += ` AND p.on_sale = TRUE`;
+    }
+
+    queryText += ` GROUP BY p.id`;
+
+    // Sorting
+    const allowedSortFields = ['created_at', 'name', 'selling_price'];
+    const allowedSortOrders = ['ASC', 'DESC'];
+    
+    const finalSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'created_at';
+    const finalSortOrder = allowedSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
+
+    if (finalSortBy === 'selling_price') {
+      queryText += ` ORDER BY effective_price ${finalSortOrder}`;
+    } else {
+      queryText += ` ORDER BY p.${finalSortBy} ${finalSortOrder}`;
+    }
+
+    // REQUIREMENT: "Emphasize 'on Sale' items in the landing page"
+    // Show sale items FIRST by default
+    if (!req.query.sortBy) {
+      queryText = `
+        SELECT * FROM (${queryText}) as sorted_products
+        ORDER BY on_sale DESC, created_at DESC
+      `;
+    }
+
+    const products = await query(queryText, params);
+
+    // Get colors, sizes, and images for each product
     const catalog = [];
 
     for (const p of products.rows) {
@@ -16,9 +128,10 @@ export const getFullCatalog = async (req, res) => {
       );
 
       const images = await query(
-        `SELECT image_url, color_id 
+        `SELECT image_url, color_id, priority
          FROM product_images
-         WHERE product_id=$1`,
+         WHERE product_id=$1
+         ORDER BY priority ASC`,
         [p.id]
       );
 
@@ -26,7 +139,8 @@ export const getFullCatalog = async (req, res) => {
         `SELECT DISTINCT s.value, s.id
          FROM inventory i
          JOIN sizes s ON s.id = i.size_id
-         WHERE i.product_id=$1`,
+         WHERE i.product_id=$1 AND i.quantity > 0
+         ORDER BY s.value`,
         [p.id]
       );
 
@@ -38,13 +152,127 @@ export const getFullCatalog = async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
-      products: catalog
+      products: catalog,
+      filters_applied: {
+        category: category || null,
+        search: search || null,
+        minPrice: minPrice || null,
+        maxPrice: maxPrice || null,
+        onSale: onSale === 'true' || false
+      }
     });
 
   } catch (err) {
     console.error("CATALOG ERROR:", err);
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+// ---------------------------------------------------
+// GET SINGLE PRODUCT BY ID
+// REQUIREMENT: "Display environmental impact information"
+// REQUIREMENT: "Display products with different sizes and colors"
+// REQUIREMENT: "Multiple photos from different angles/colors"
+// ---------------------------------------------------
+export const getProductById = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    // Get product details with sale price calculation
+    const product = await query(
+      `SELECT 
+        p.*,
+        CASE 
+          WHEN p.on_sale = TRUE AND p.sale_price IS NOT NULL 
+          THEN p.sale_price 
+          ELSE p.selling_price 
+        END as effective_price,
+        CASE 
+          WHEN p.on_sale = TRUE AND p.sale_price IS NOT NULL 
+          THEN ROUND(((p.selling_price - p.sale_price) / p.selling_price) * 100)
+          ELSE NULL
+        END as discount_percentage
+       FROM products p
+       WHERE p.id = $1`,
+      [productId]
+    );
+
+    if (product.rows.length === 0) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    const productData = product.rows[0];
+
+    // Get all colors for this product
+    const colors = await query(
+      `SELECT DISTINCT 
+        c.id,
+        c.value,
+        (SELECT image_url FROM product_images 
+         WHERE product_id = $1 AND color_id = c.id 
+         ORDER BY priority LIMIT 1) as color_image
+       FROM colors c
+       JOIN product_colors pc ON pc.color_id = c.id
+       WHERE pc.product_id = $1
+       ORDER BY c.value`,
+      [productId]
+    );
+
+    // REQUIREMENT: Multiple photos from different angles/colors
+    const images = await query(
+      `SELECT 
+        pi.id,
+        pi.image_url,
+        pi.alt_text,
+        pi.priority,
+        c.value as color_name,
+        c.id as color_id
+       FROM product_images pi
+       LEFT JOIN colors c ON c.id = pi.color_id
+       WHERE pi.product_id = $1
+       ORDER BY pi.priority ASC, c.value`,
+      [productId]
+    );
+
+    // REQUIREMENT: Display sizes and colors with availability
+    const inventory = await query(
+      `SELECT 
+        inv.id as inventory_id,
+        c.id as color_id,
+        c.value as color,
+        s.id as size_id,
+        s.value as size,
+        inv.quantity
+       FROM inventory inv
+       JOIN colors c ON c.id = inv.color_id
+       JOIN sizes s ON s.id = inv.size_id
+       WHERE inv.product_id = $1
+       ORDER BY c.value, s.value`,
+      [productId]
+    );
+
+    // REQUIREMENT: "Display environmental impact information and storytelling"
+    const environmentalImpact = {
+      story: productData.impact_story,
+      sustainability_rating: productData.sustainability_rating,
+      carbon_footprint: productData.carbon_footprint,
+      ethical_sourcing: productData.ethical_sourcing,
+      recycled_materials: productData.recycled_materials
+    };
+
+    return res.json({
+      success: true,
+      product: productData,
+      colors: colors.rows,
+      images: images.rows,
+      sizes: inventory.rows,
+      environmental_impact: environmentalImpact
+    });
+
+  } catch (err) {
+    console.error("GET PRODUCT ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 };

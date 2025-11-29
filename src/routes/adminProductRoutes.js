@@ -5,63 +5,55 @@ import {
   adminUpdateInventory,
   adminDeleteProduct,
   adminGetAllProducts,
-  adminGetSingleProduct
+  adminGetSingleProduct,
+  // NEW IMPORTS
+  markProductOnSale,
+  removeProductFromSale,
+  updateProductImpact
 } from "../controllers/adminProductController.js";
 
 import { upload } from "../middleware/uploadMiddleware.js";
-import { authMiddleware } from "../middleware/auth.js";
-import { requireRole } from "../middleware/roleMiddleware.js";
+import { authMiddleware, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
+
+// All routes require admin authentication
+router.use(authMiddleware);
+router.use(requireRole("ADMIN"));
 
 // CREATE PRODUCT (With images + sizes per color)
 router.post(
   "/",
-  authMiddleware,
-  requireRole("ADMIN"),
   upload.array("images", 20),
   adminCreateProduct
 );
 
 // GET ALL PRODUCTS
-router.get(
-  "/",
-  authMiddleware,
-  requireRole("ADMIN"),
-  adminGetAllProducts
-);
+router.get("/", adminGetAllProducts);
 
 // GET SINGLE PRODUCT DETAILS
-router.get(
-  "/:id",
-  authMiddleware,
-  requireRole("ADMIN"),
-  adminGetSingleProduct
-);
+router.get("/:id", adminGetSingleProduct);
 
 // UPDATE MAIN PRODUCT DATA (with optional images and variants)
 router.put(
   "/:id",
-  authMiddleware,
-  requireRole("ADMIN"),
   upload.array("images", 20), 
   adminUpdateProduct
 );
 
 // UPDATE INVENTORY OF ONE VARIANT (color + size)
-router.patch(
-  "/:id/inventory",
-  authMiddleware,
-  requireRole("ADMIN"),
-  adminUpdateInventory
-);
+router.patch("/:id/inventory", adminUpdateInventory);
+
+// NEW: MARK PRODUCT AS ON SALE
+router.patch("/:id/sale/mark", markProductOnSale);
+
+// NEW: REMOVE PRODUCT FROM SALE
+router.patch("/:id/sale/remove", removeProductFromSale);
+
+// NEW: UPDATE ENVIRONMENTAL IMPACT DATA
+router.patch("/:id/impact", updateProductImpact);
 
 // DELETE PRODUCT
-router.delete(
-  "/:id",
-  authMiddleware,
-  requireRole("ADMIN"),
-  adminDeleteProduct
-);
+router.delete("/:id", adminDeleteProduct);
 
 export default router;
