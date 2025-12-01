@@ -6,7 +6,6 @@ import {
   adminDeleteProduct,
   adminGetAllProducts,
   adminGetSingleProduct,
-  // NEW IMPORTS
   markProductOnSale,
   removeProductFromSale,
   updateProductImpact
@@ -21,12 +20,19 @@ const router = express.Router();
 router.use(authMiddleware);
 router.use(requireRole("ADMIN"));
 
+// Multer error handler wrapper
+const handleUpload = (req, res, next) => {
+  upload.array("images", 20)(req, res, (err) => {
+    if (err) {
+      console.error("MULTER ERROR:", err);
+      return res.status(400).json({ error: `Upload error: ${err.message}` });
+    }
+    next();
+  });
+};
+
 // CREATE PRODUCT (With images + sizes per color)
-router.post(
-  "/",
-  upload.array("images", 20),
-  adminCreateProduct
-);
+router.post("/", handleUpload, adminCreateProduct);
 
 // GET ALL PRODUCTS
 router.get("/", adminGetAllProducts);
@@ -35,11 +41,7 @@ router.get("/", adminGetAllProducts);
 router.get("/:id", adminGetSingleProduct);
 
 // UPDATE MAIN PRODUCT DATA (with optional images and variants)
-router.put(
-  "/:id",
-  upload.array("images", 20), 
-  adminUpdateProduct
-);
+router.put("/:id", handleUpload, adminUpdateProduct);
 
 // UPDATE INVENTORY OF ONE VARIANT (color + size)
 router.patch("/:id/inventory", adminUpdateInventory);

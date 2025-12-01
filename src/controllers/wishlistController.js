@@ -4,44 +4,30 @@ import { query } from "../db/db.js";
 // Helper: Get or create guest wishlist
 // ---------------------------------------------------
 async function getOrCreateGuestWishlist(req) {
-  console.log("HELPER: getOrCreateGuestWishlist called");
-  
   let guestId = req.headers["x-guest-id"];
-  console.log("Guest ID from header:", guestId);
 
   if (!guestId) {
-    console.log("No guest ID found, creating new guest user...");
     // Create new guest user
     const newGuest = await query(
       `INSERT INTO guest_users (email) VALUES (NULL) RETURNING id`
     );
     guestId = newGuest.rows[0].id;
-    console.log("New guest user created with ID:", guestId);
   }
 
   // Ensure guest wishlist exists
-  console.log("Looking for existing wishlist for guest:", guestId);
   let wishlist = await query(
     `SELECT id FROM wishlist WHERE guest_id=$1`,
     [guestId]
   );
 
-  console.log("Wishlist query result:", wishlist.rows);
-
   if (wishlist.rows.length === 0) {
-    console.log("No wishlist found, creating new wishlist...");
     wishlist = await query(
       `INSERT INTO wishlist (guest_id) VALUES ($1) RETURNING id`,
       [guestId]
     );
-    console.log("New wishlist created with ID:", wishlist.rows[0].id);
-  } else {
-    console.log("Existing wishlist found with ID:", wishlist.rows[0].id);
   }
 
-  const result = { wishlistId: wishlist.rows[0].id, guestId };
-  console.log("Returning:", result);
-  return result;
+  return { wishlistId: wishlist.rows[0].id, guestId };
 }
 
 // ---------------------------------------------------
@@ -88,6 +74,8 @@ export const getWishlist = async (req, res) => {
         wi.product_id,
         p.name,
         p.selling_price,
+        p.sale_price,
+        p.on_sale,
         p.description,
         p.category,
         (SELECT image_url FROM product_images 
@@ -101,10 +89,11 @@ export const getWishlist = async (req, res) => {
       ORDER BY wi.added_at DESC
     `, [wishlistId]);
 
-    // Get available colors for each product
+    // Get available colors AND sizes for each product
     const enhancedItems = [];
     
     for (const item of items.rows) {
+      // Get colors
       const colors = await query(`
         SELECT c.id, c.value
         FROM product_colors pc
@@ -112,9 +101,19 @@ export const getWishlist = async (req, res) => {
         WHERE pc.product_id=$1
       `, [item.product_id]);
 
+      // Get sizes (from inventory where quantity > 0)
+      const sizes = await query(`
+        SELECT DISTINCT s.id, s.value
+        FROM inventory i
+        JOIN sizes s ON s.id = i.size_id
+        WHERE i.product_id=$1 AND i.quantity > 0
+        ORDER BY s.value
+      `, [item.product_id]);
+
       enhancedItems.push({
         ...item,
         available_colors: colors.rows,
+        available_sizes: sizes.rows.map(s => s.value), // Return as array of values
         in_stock: item.variants_in_stock > 0
       });
     }
@@ -137,76 +136,42 @@ export const getWishlist = async (req, res) => {
 // ---------------------------------------------------
 export const addToWishlist = async (req, res) => {
   try {
-    // DEBUG LOGS START
-    console.log("========================================");
-    console.log("ADD TO WISHLIST - DEBUG INFO");
-    console.log("========================================");
-    console.log("Request Headers:", {
-      authorization: req.headers.authorization ? "Present" : "Missing",
-      "x-guest-id": req.headers["x-guest-id"] || "Missing",
-      "content-type": req.headers["content-type"]
-    });
-    console.log("Request Body:", JSON.stringify(req.body, null, 2));
-    console.log("req.user:", req.user ? JSON.stringify(req.user, null, 2) : "null (guest mode)");
-    console.log("========================================\n");
-    // DEBUG LOGS END
-
     const user = req.user;
     const { product_id } = req.body;
 
-    console.log("Extracted product_id:", product_id);
-
     if (!product_id) {
-      console.log("ERROR: product_id is missing or undefined");
       return res.status(400).json({ error: "Missing product_id" });
     }
 
-    console.log("product_id validation passed");
-
     // Verify product exists
-    console.log("Checking if product exists in database...");
     const productExists = await query(
       `SELECT id FROM products WHERE id=$1`,
       [product_id]
     );
 
-    console.log("Product query result:", productExists.rows);
-
     if (productExists.rows.length === 0) {
-      console.log("ERROR: Product not found in database");
       return res.status(404).json({ error: "Product not found" });
     }
-
-    console.log("Product exists in database");
 
     let wishlistId, guestId;
 
     if (user) {
       // Logged-in user
-      console.log("Processing as LOGGED-IN USER, user.id:", user.id);
       const result = await getOrCreateUserWishlist(user.id);
       wishlistId = result.wishlistId;
-      console.log("User wishlist ID:", wishlistId);
     } else {
       // Guest user
-      console.log("Processing as GUEST USER");
       const result = await getOrCreateGuestWishlist(req);
       wishlistId = result.wishlistId;
       guestId = result.guestId;
-      console.log("Guest wishlist ID:", wishlistId);
-      console.log("Guest ID:", guestId);
     }
 
     // Add to wishlist
-    console.log("Adding item to wishlist...");
     await query(`
       INSERT INTO wishlist_items (wishlist_id, product_id)
       VALUES ($1, $2)
       ON CONFLICT DO NOTHING
     `, [wishlistId, product_id]);
-
-    console.log("Successfully added to wishlist");
-    console.log("========================================\n");
 
     return res.json({
       success: true,
@@ -215,12 +180,7 @@ export const addToWishlist = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("========================================");
-    console.error("ADD WISHLIST ERROR - FULL DETAILS:");
-    console.error("========================================");
-    console.error("Error message:", err.message);
-    console.error("Error stack:", err.stack);
-    console.error("========================================\n");
+    console.error("ADD WISHLIST ERROR:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 };

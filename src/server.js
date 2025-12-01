@@ -20,17 +20,32 @@ import paymentCardRoutes from "./routes/paymentCardRoutes.js";
 import checkoutRoutes from "./routes/checkoutRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import adminOrderRoutes from "./routes/adminOrderRoutes.js";
+import path from "path";
+import { fileURLToPath } from 'url';
 
 const app = express();
+
+// Increase timeout for large uploads
+app.use((req, res, next) => {
+  req.setTimeout(300000); // 5 minutes
+  res.setTimeout(300000);
+  next();
+});
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ----------------------
 // GLOBAL MIDDLEWARE
 // ----------------------
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Increased limit for large payloads
-app.use(express.urlencoded({ extended: true, limit: '10mb' })); // Increased limit
-app.use(helmet());
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
 app.use(morgan("dev"));
+
+app.use('/images', express.static(path.join(__dirname, '..', 'public', 'images')));
 
 // ----------------------
 // USER + AUTH
@@ -70,6 +85,17 @@ app.use("/api/orders", orderRoutes);
 // ----------------------
 app.get("/", (req, res) => {
   res.json({ message: "GreenShoes API is running..." });
+});
+
+// ----------------------
+// ERROR HANDLERS
+// ----------------------
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Rejection:', err);
 });
 
 // ----------------------

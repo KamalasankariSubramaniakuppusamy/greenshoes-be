@@ -227,8 +227,15 @@ export const checkoutRegisteredUserSavedCard = async (req, res) => {
       return res.status(400).json({ error: "Cart is empty" });
     }
 
-    // Verify saved card and CVC
-    const cardVerification = await verifyCardForPayment(userId, cvc);
+    // SECURITY FIX: Verify saved card AND CVC
+    let cardVerification;
+    try {
+      cardVerification = await verifyCardForPayment(userId, cvc);
+    } catch (verifyError) {
+      return res.status(400).json({ 
+        error: verifyError.message || "Card verification failed" 
+      });
+    }
     
     if (!cardVerification.valid) {
       return res.status(400).json({ error: "Card verification failed" });
@@ -391,7 +398,7 @@ export const checkoutRegisteredUserNewCard = async (req, res) => {
       return res.status(400).json({ error: "Payment failed" });
     }
 
-    // Save card if requested (with billing address)
+    // Save card if requested (with billing address AND CVC for future verification)
     if (save_card) {
       const { saveCard } = await import('./paymentCardController.js');
       const mockReq = { 
@@ -399,6 +406,7 @@ export const checkoutRegisteredUserNewCard = async (req, res) => {
         body: { 
           card_number, 
           expiry, 
+          cvc, // SECURITY FIX: Include CVC for hashing
           card_type: 'DEBIT',
           billing_address_id: finalBillingAddressId // Link billing to card
         } 

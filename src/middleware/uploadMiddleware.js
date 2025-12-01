@@ -2,28 +2,29 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 
-// Ensure folder exists
-const uploadPath = "public/uploads/products";
-if (!fs.existsSync(uploadPath)) {
-  fs.mkdirSync(uploadPath, { recursive: true });
-}
-
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
+    // Use a temporary uploads folder first
+    const uploadPath = path.join("uploads", "temp");
+    
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+    
     cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
     const name = file.originalname.replace(/\s+/g, "-").toLowerCase();
-    cb(null, `${Date.now()}-${name}`);
+    cb(null, name);
   }
 });
 
 export const upload = multer({ 
   storage,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB per file
-    fieldSize: 10 * 1024 * 1024, // 10MB for text fields (increased!)
-    fields: 50 // Allow up to 50 non-file fields
+    fileSize: 50 * 1024 * 1024,
+    fieldSize: 50 * 1024 * 1024,
+    fields: 50,
+    files: 20
   }
 });

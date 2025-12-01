@@ -3,7 +3,36 @@ import fs from "fs";
 import path from "path";
 
 const MIN_COST_PRICE = 1999;
-const SHIPPING_FEE = 11.95; //flat shipping fee for all products according to the requirmetns doc.
+const SHIPPING_FEE = 11.95; //flat shipping fee for all products according to the requirmetns
+
+// ----------------------------------------------
+// Helper: Get image priority based on view type
+// Lower number = higher priority (shown first)
+// ----------------------------------------------
+function getImagePriority(filename) {
+  const lowerFilename = filename.toLowerCase();
+  
+  // Extract the view type (last part before extension)
+  // e.g., "smoothlikebutter-black-model.png" → "model"
+  const parts = lowerFilename.replace(/\.[^.]+$/, '').split('-');
+  const viewType = parts[parts.length - 1];
+  
+  // Priority map: model and pair images should show first
+  const priorityMap = {
+    'model': 1,
+    'pair': 2,
+    'front': 3,
+    'side': 4,
+    'right': 5,
+    'left': 6,
+    'back': 7,
+    'top': 8,
+    'detail': 9,
+    'closeup': 10
+  };
+  
+  return priorityMap[viewType] || 50; // Default priority for unknown types
+}
 
 // ----------------------------------------------
 // Helper: Extract color from filename
@@ -23,6 +52,16 @@ function normalizeProductName(name) {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// ----------------------------------------------
+// Helper: Create slug from product name (for folder paths)
+// ----------------------------------------------
+function createSlug(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 // ----------------------------------------------
@@ -108,33 +147,40 @@ export const adminCreateProduct = async (req, res) => {
       });
     }
 
-    if (selling_price > cost_price) {
-      return res.status(400).json({
-        error: "Selling price cannot be greater than cost price",
-      });
-    }
-
-    // Determine price category (YOUR LOGIC - KEPT)
+    // Determine price category and sale status
     const price_category =
       Number(selling_price) < Number(cost_price) ? "discount" : "normal";
+    
+    // AUTO SALE: If selling price < cost price, mark as on sale
+    // In this case:
+    // - on_sale = true
+    // - sale_price = what admin entered as selling_price (the discounted price)
+    // - selling_price in DB = cost_price (the "original" price to show as crossed out)
+    const isOnSale = Number(selling_price) < Number(cost_price);
+    
+    const dbSellingPrice = isOnSale ? cost_price : selling_price;
+    const dbSalePrice = isOnSale ? selling_price : null;
 
     const normalizedName = normalizeProductName(name);
+    const productSlug = createSlug(name);
 
     // ----------------------
     // Insert Product
     // ----------------------
     const productResult = await query(
       `INSERT INTO products 
-         (name, description, category, cost_price, selling_price, price_category)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (name, description, category, cost_price, selling_price, price_category, on_sale, sale_price)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
         normalizedName,
         description,
         category,
         cost_price,
-        selling_price,
+        dbSellingPrice,
         price_category,
+        isOnSale,
+        dbSalePrice
       ]
     );
 
@@ -161,6 +207,12 @@ export const adminCreateProduct = async (req, res) => {
       }
     }
 
+    // Create the target directory for images: /images/category/productslug/
+    const imageDir = path.join(process.cwd(), 'public', 'images', category, productSlug);
+    if (!fs.existsSync(imageDir)) {
+      fs.mkdirSync(imageDir, { recursive: true });
+    }
+
     // Now insert everything
     for (const variant of variants) {
       const colorName = variant.color.toLowerCase();
@@ -180,10 +232,27 @@ export const adminCreateProduct = async (req, res) => {
       for (const img of images) {
         const colorFromFile = extractColorFromFilename(img.originalname);
         if (colorFromFile === colorName) {
+          // Move image from uploads to the proper folder structure
+          const sourcePath = img.path;
+          const destFilename = img.originalname.toLowerCase();
+          const destPath = path.join(imageDir, destFilename);
+          
+          // Copy file to new location (or move if you prefer)
+          try {
+            fs.copyFileSync(sourcePath, destPath);
+            // Optionally delete the original: fs.unlinkSync(sourcePath);
+          } catch (copyErr) {
+            console.error('Error copying image:', copyErr);
+          }
+
+          // Store the correct path in database with priority
+          const imageUrl = `/images/${category}/${productSlug}/${destFilename}`;
+          const priority = getImagePriority(img.originalname);
+          
           await query(
-            `INSERT INTO product_images (product_id, color_id, image_url)
-             VALUES ($1, $2, $3)`,
-            [product.id, colorId, `/images/${img.filename}`]
+            `INSERT INTO product_images (product_id, color_id, image_url, priority)
+             VALUES ($1, $2, $3, $4)`,
+            [product.id, colorId, imageUrl, priority]
           );
         }
       }
@@ -261,8 +330,24 @@ export const adminUpdateProduct = async (req, res) => {
 
     // Update price category if prices are being updated
     let price_category = null;
+    let isOnSale = null;
+    let dbSellingPrice = selling_price;
+    let dbSalePrice = null;
+    
     if (selling_price && cost_price) {
-      price_category = Number(selling_price) < Number(cost_price) ? "discount" : "normal";
+      const isDiscount = Number(selling_price) < Number(cost_price);
+      price_category = isDiscount ? "discount" : "normal";
+      
+      // AUTO SALE: If selling price < cost price, mark as on sale
+      if (isDiscount) {
+        isOnSale = true;
+        dbSalePrice = selling_price;  // The discounted price
+        dbSellingPrice = cost_price;   // The "original" price (shown crossed out)
+      } else {
+        isOnSale = false;
+        dbSalePrice = null;
+        dbSellingPrice = selling_price;
+      }
     }
 
     // Normalize name if provided
@@ -277,15 +362,20 @@ export const adminUpdateProduct = async (req, res) => {
            cost_price = COALESCE($4, cost_price),
            selling_price = COALESCE($5, selling_price),
            price_category = COALESCE($6, price_category),
+           on_sale = COALESCE($7, on_sale),
+           sale_price = $8,
            updated_at = NOW()
-       WHERE id=$7
+       WHERE id=$9
        RETURNING *`,
-      [normalizedName, description, category, cost_price, selling_price, price_category, productId]
+      [normalizedName, description, category, cost_price, dbSellingPrice, price_category, isOnSale, dbSalePrice, productId]
     );
 
     if (updated.rows.length === 0) {
       return res.status(404).json({ error: "Product not found" });
     }
+
+    const product = updated.rows[0];
+    const productSlug = createSlug(product.name);
 
     // If variants are provided, update colors and inventory
     if (variants && Array.isArray(variants)) {
@@ -361,6 +451,12 @@ export const adminUpdateProduct = async (req, res) => {
         }
       }
 
+      // Create the target directory for images
+      const imageDir = path.join(process.cwd(), 'public', 'images', product.category, productSlug);
+      if (!fs.existsSync(imageDir)) {
+        fs.mkdirSync(imageDir, { recursive: true });
+      }
+
       // Insert new images
       for (const img of images) {
         const colorFromFile = extractColorFromFilename(img.originalname);
@@ -371,10 +467,25 @@ export const adminUpdateProduct = async (req, res) => {
         
         if (colorResult.rows.length > 0) {
           const colorId = colorResult.rows[0].id;
+
+          // Move image to proper folder structure
+          const sourcePath = img.path;
+          const destFilename = img.originalname.toLowerCase();
+          const destPath = path.join(imageDir, destFilename);
+          
+          try {
+            fs.copyFileSync(sourcePath, destPath);
+          } catch (copyErr) {
+            console.error('Error copying image:', copyErr);
+          }
+
+          const imageUrl = `/images/${product.category}/${productSlug}/${destFilename}`;
+          const priority = getImagePriority(img.originalname);
+
           await query(
-            `INSERT INTO product_images (product_id, color_id, image_url)
-             VALUES ($1, $2, $3)`,
-            [productId, colorId, `/images/${img.filename}`]
+            `INSERT INTO product_images (product_id, color_id, image_url, priority)
+             VALUES ($1, $2, $3, $4)`,
+            [productId, colorId, imageUrl, priority]
           );
         }
       }
@@ -448,8 +559,48 @@ export const adminDeleteProduct = async (req, res) => {
 //
 export const adminGetAllProducts = async (req, res) => {
   try {
-    const result = await query(`SELECT * FROM products ORDER BY created_at DESC`);
-    return res.json({ success: true, products: result.rows });
+    // Get all products with their colors, sizes, and stock info
+    const productsResult = await query(`SELECT * FROM products ORDER BY created_at DESC`);
+    
+    const products = await Promise.all(productsResult.rows.map(async (product) => {
+      // Get colors for this product
+      const colorsResult = await query(
+        `SELECT c.value FROM product_colors pc
+         JOIN colors c ON c.id = pc.color_id
+         WHERE pc.product_id = $1`,
+        [product.id]
+      );
+      
+      // Get sizes and total stock for this product
+      const inventoryResult = await query(
+        `SELECT s.value, i.quantity FROM inventory i
+         JOIN sizes s ON s.id = i.size_id
+         WHERE i.product_id = $1`,
+        [product.id]
+      );
+      
+      // Get main image
+      const imageResult = await query(
+        `SELECT image_url FROM product_images 
+         WHERE product_id = $1 
+         ORDER BY priority ASC LIMIT 1`,
+        [product.id]
+      );
+      
+      const colors = colorsResult.rows.map(c => c.value);
+      const sizes = [...new Set(inventoryResult.rows.map(s => s.value))];
+      const totalStock = inventoryResult.rows.reduce((sum, i) => sum + (i.quantity || 0), 0);
+      
+      return {
+        ...product,
+        colors,
+        sizes,
+        total_stock: totalStock,
+        main_image: imageResult.rows[0]?.image_url || null
+      };
+    }));
+    
+    return res.json({ success: true, products });
   } catch (err) {
     console.error("GET ALL PRODUCTS ERROR:", err);
     return res.status(500).json({ error: "Internal server error" });

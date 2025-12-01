@@ -94,7 +94,21 @@ export const getSingleProduct = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const product = await query(`SELECT * FROM products WHERE id=$1`, [id]);
+    // Get product with stock status calculated
+    const product = await query(`
+      SELECT 
+        p.*,
+        CASE 
+          WHEN COALESCE(SUM(inv.quantity), 0) = 0 THEN 'out_of_stock'
+          WHEN COALESCE(SUM(inv.quantity), 0) < 10 THEN 'running_out'
+          ELSE 'in_stock'
+        END as status
+      FROM products p
+      LEFT JOIN inventory inv ON inv.product_id = p.id
+      WHERE p.id = $1
+      GROUP BY p.id
+    `, [id]);
+
     if (product.rows.length === 0)
       return res.status(404).json({ error: "Product not found" });
 

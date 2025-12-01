@@ -77,7 +77,6 @@ export const adminGetOrderDetails = async (req, res) => {
         o.*,
         u.full_name as user_name,
         u.email as user_email,
-        u.phone as user_phone,
         sa.full_name as shipping_name,
         sa.phone as shipping_phone,
         sa.address1 as shipping_address1,
@@ -135,9 +134,6 @@ export const adminGetOrderDetails = async (req, res) => {
       [orderId]
     );
 
-    // Calculate delivery date
-    const delivery = calculateDeliveryDate(orderData.created_at);
-
     return res.json({
       success: true,
       order: {
@@ -145,13 +141,12 @@ export const adminGetOrderDetails = async (req, res) => {
         order_number: orderData.order_number,
         order_date: orderData.created_at,
         status: orderData.status,
-        estimated_delivery: delivery.date,
         
         customer_type: orderData.user_id ? "REGISTERED" : "GUEST",
         customer_info: {
           name: orderData.user_name || orderData.shipping_name || "Guest Customer",
           email: orderData.user_email || "N/A",
-          phone: orderData.user_phone || orderData.shipping_phone
+          phone: orderData.shipping_phone || "N/A"
         },
         
         items: itemsWithSubtotals,

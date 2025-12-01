@@ -2,8 +2,7 @@ import { query } from "../db/db.js";
 
 // ---------------------------------------------------
 // GET FULL CATALOG (with search, filters, emphasis on sale)
-// REQUIREMENT: "Allow users to use filters and search words"
-// REQUIREMENT: "Emphasize 'on Sale' items in the landing page"
+// Now includes per-variant stock status alerts
 // ---------------------------------------------------
 export const getFullCatalog = async (req, res) => {
   try {
@@ -36,8 +35,9 @@ export const getFullCatalog = async (req, res) => {
          ORDER BY priority ASC 
          LIMIT 1) as main_image,
         CASE 
-          WHEN SUM(inv.quantity) > 0 THEN 'in_stock'
-          ELSE 'out_of_stock'
+          WHEN SUM(inv.quantity) = 0 THEN 'out_of_stock'
+          WHEN SUM(inv.quantity) < 10 THEN 'running_out'
+          ELSE 'in_stock'
         END as status,
         CASE 
           WHEN p.on_sale = TRUE AND p.sale_price IS NOT NULL 
@@ -57,21 +57,21 @@ export const getFullCatalog = async (req, res) => {
     const params = [];
     let paramIndex = 1;
 
-    // REQUIREMENT: Filter by category
+    // Filter by category
     if (category) {
       queryText += ` AND p.category = $${paramIndex}`;
       params.push(category);
       paramIndex++;
     }
 
-    // REQUIREMENT: Search by name or description
+    // Search by name or description
     if (search) {
       queryText += ` AND (p.name ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex})`;
       params.push(`%${search}%`);
       paramIndex++;
     }
 
-    // REQUIREMENT: Filter by price range
+    // Filter by price range
     if (minPrice) {
       queryText += ` AND COALESCE(p.sale_price, p.selling_price) >= $${paramIndex}`;
       params.push(parseFloat(minPrice));
@@ -84,7 +84,7 @@ export const getFullCatalog = async (req, res) => {
       paramIndex++;
     }
 
-    // REQUIREMENT: Filter by on sale items
+    // Filter by on sale items
     if (onSale === 'true') {
       queryText += ` AND p.on_sale = TRUE`;
     }
@@ -104,7 +104,6 @@ export const getFullCatalog = async (req, res) => {
       queryText += ` ORDER BY p.${finalSortBy} ${finalSortOrder}`;
     }
 
-    // REQUIREMENT: "Emphasize 'on Sale' items in the landing page"
     // Show sale items FIRST by default
     if (!req.query.sortBy) {
       queryText = `
@@ -115,7 +114,7 @@ export const getFullCatalog = async (req, res) => {
 
     const products = await query(queryText, params);
 
-    // Get colors, sizes, and images for each product
+    // Get colors, sizes, images, and STOCK ALERTS for each product
     const catalog = [];
 
     for (const p of products.rows) {
@@ -144,11 +143,94 @@ export const getFullCatalog = async (req, res) => {
         [p.id]
       );
 
+      // NEW: Get per-variant stock status for alerts
+      const variantStock = await query(
+        `SELECT 
+          c.value as color,
+          s.value as size,
+          i.quantity,
+          CASE 
+            WHEN i.quantity = 0 THEN 'out_of_stock'
+            WHEN i.quantity < 10 THEN 'running_out'
+            ELSE 'in_stock'
+          END as variant_status
+         FROM inventory i
+         JOIN colors c ON c.id = i.color_id
+         JOIN sizes s ON s.id = i.size_id
+         WHERE i.product_id = $1
+         ORDER BY c.value, s.value::float`,
+        [p.id]
+      );
+
+      // Build stock alerts array
+      const stockAlerts = [];
+      const runningOutVariants = [];
+      const outOfStockVariants = [];
+
+      for (const variant of variantStock.rows) {
+        if (variant.variant_status === 'out_of_stock') {
+          outOfStockVariants.push({
+            color: variant.color,
+            size: variant.size,
+            quantity: variant.quantity
+          });
+        } else if (variant.variant_status === 'running_out') {
+          runningOutVariants.push({
+            color: variant.color,
+            size: variant.size,
+            quantity: variant.quantity
+          });
+        }
+      }
+
+      // Create human-readable alerts
+      if (outOfStockVariants.length > 0) {
+        if (outOfStockVariants.length <= 2) {
+          outOfStockVariants.forEach(v => {
+            stockAlerts.push({
+              type: 'out_of_stock',
+              message: `${v.color} Size ${v.size} - Out of Stock`,
+              color: v.color,
+              size: v.size
+            });
+          });
+        } else {
+          stockAlerts.push({
+            type: 'out_of_stock',
+            message: `${outOfStockVariants.length} variants out of stock`,
+            variants: outOfStockVariants
+          });
+        }
+      }
+
+      if (runningOutVariants.length > 0) {
+        if (runningOutVariants.length <= 2) {
+          runningOutVariants.forEach(v => {
+            stockAlerts.push({
+              type: 'running_out',
+              message: `${v.color} Size ${v.size} - Only ${v.quantity} left`,
+              color: v.color,
+              size: v.size,
+              quantity: v.quantity
+            });
+          });
+        } else {
+          stockAlerts.push({
+            type: 'running_out',
+            message: `${runningOutVariants.length} variants running out`,
+            variants: runningOutVariants
+          });
+        }
+      }
+
       catalog.push({
         ...p,
         colors: colors.rows,
         sizes: sizes.rows,
-        images: images.rows
+        images: images.rows,
+        stock_alerts: stockAlerts,
+        variants_running_out: runningOutVariants.length,
+        variants_out_of_stock: outOfStockVariants.length
       });
     }
 
@@ -172,9 +254,6 @@ export const getFullCatalog = async (req, res) => {
 
 // ---------------------------------------------------
 // GET SINGLE PRODUCT BY ID
-// REQUIREMENT: "Display environmental impact information"
-// REQUIREMENT: "Display products with different sizes and colors"
-// REQUIREMENT: "Multiple photos from different angles/colors"
 // ---------------------------------------------------
 export const getProductById = async (req, res) => {
   try {
@@ -220,7 +299,7 @@ export const getProductById = async (req, res) => {
       [productId]
     );
 
-    // REQUIREMENT: Multiple photos from different angles/colors
+    // Multiple photos from different angles/colors
     const images = await query(
       `SELECT 
         pi.id,
@@ -236,7 +315,7 @@ export const getProductById = async (req, res) => {
       [productId]
     );
 
-    // REQUIREMENT: Display sizes and colors with availability
+    // Display sizes and colors with availability
     const inventory = await query(
       `SELECT 
         inv.id as inventory_id,
@@ -253,7 +332,7 @@ export const getProductById = async (req, res) => {
       [productId]
     );
 
-    // REQUIREMENT: "Display environmental impact information and storytelling"
+    // Display environmental impact information and storytelling
     const environmentalImpact = {
       story: productData.impact_story,
       sustainability_rating: productData.sustainability_rating,
