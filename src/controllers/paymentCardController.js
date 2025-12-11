@@ -24,6 +24,48 @@ function generateSalt() {
 }
 
 // ---------------------------------------------------
+// DEMO SECURITY: Generate expected CVC from card number
+// In production, this validation happens at the payment processor/bank.
+// For demo purposes, we deterministically generate the "correct" CVC
+// based on the card number, simulating real-world CVC verification.
+// ---------------------------------------------------
+function generateExpectedCVC(cardNumber) {
+  const cleaned = cardNumber.replace(/\s+/g, '');
+  
+  // Use a hash of the card number to generate a deterministic 3-digit CVC
+  // This ensures the same card always requires the same CVC
+  const hash = crypto.createHash('sha256')
+    .update(cleaned + 'DEMO_CVC_SECRET')
+    .digest('hex');
+  
+  // Convert first 6 hex chars to a number, then mod 900 + 100 to get 3-digit CVC
+  const numericValue = parseInt(hash.substring(0, 6), 16);
+  const expectedCVC = (numericValue % 900) + 100; // Results in 100-999
+  
+  return expectedCVC.toString();
+}
+
+// ---------------------------------------------------
+// DEMO SECURITY: Verify CVC for one-time payments
+// Simulates bank-side CVC verification
+// ---------------------------------------------------
+function verifyCVCForCard(cardNumber, providedCVC) {
+  const expectedCVC = generateExpectedCVC(cardNumber);
+  
+  // For demo convenience: Also accept the expected CVC displayed in error
+  // In production, user would need to know their actual card's CVC
+  if (providedCVC === expectedCVC) {
+    return { valid: true };
+  }
+  
+  return { 
+    valid: false, 
+    message: `Invalid CVC. Payment declined by bank. Enter the correct security for your card to proceed checkout!)`,
+    expectedCVC: expectedCVC // Only for demo - NEVER expose in production!
+  };
+}
+
+// ---------------------------------------------------
 // SAVE CARD (for registered users only)
 // Now also stores hashed CVC for verification
 // ---------------------------------------------------
@@ -51,9 +93,17 @@ export const saveCard = async (req, res) => {
       return res.status(400).json({ error: expiryValidation.message });
     }
 
-    // Validate CVC
+    // Validate CVC format
     if (!cvc || !/^\d{3,4}$/.test(cvc)) {
       return res.status(400).json({ error: "Valid CVC is required to save card" });
+    }
+
+    // SECURITY FIX: Verify CVC is correct before allowing card to be saved
+    const cvcVerification = verifyCVCForCard(card_number, cvc);
+    if (!cvcVerification.valid) {
+      return res.status(400).json({ 
+        error: cvcVerification.message 
+      });
     }
 
     // Split card into segments
@@ -273,6 +323,7 @@ export async function verifyCardForPayment(userId, cvc) {
 
 // ---------------------------------------------------
 // PROCESS ONE-TIME PAYMENT (for guest or new card)
+// SECURITY FIX: Now validates CVC against expected value
 // ---------------------------------------------------
 export async function processOneTimePayment(cardData) {
   const { card_number, expiry, cvc, card_type } = cardData;
@@ -294,9 +345,16 @@ export async function processOneTimePayment(cardData) {
     throw new Error(expiryValidation.message);
   }
 
-  // Validate CVC
+  // Validate CVC format
   if (!/^\d{3,4}$/.test(cvc)) {
     throw new Error("Invalid CVC format");
+  }
+
+  // SECURITY FIX: Verify CVC is correct for this card
+  // This simulates bank-side CVC verification that happens in production
+  const cvcVerification = verifyCVCForCard(card_number, cvc);
+  if (!cvcVerification.valid) {
+    throw new Error(cvcVerification.message);
   }
 
   // Get last 4 digits
@@ -311,3 +369,36 @@ export async function processOneTimePayment(cardData) {
     last4: last4
   };
 }
+
+// ---------------------------------------------------
+// UTILITY: Get expected CVC for a test card (DEMO ONLY)
+// This endpoint helps testers know the valid CVC for test cards
+// REMOVE IN PRODUCTION!
+// ---------------------------------------------------
+export const getTestCardCVC = async (req, res) => {
+  try {
+    const { card_number } = req.query;
+    
+    if (!card_number) {
+      return res.status(400).json({ error: "card_number query param required" });
+    }
+
+    const cardValidation = validateCardNumber(card_number);
+    if (!cardValidation.valid) {
+      return res.status(400).json({ error: cardValidation.message });
+    }
+
+    const expectedCVC = generateExpectedCVC(card_number);
+
+    return res.json({
+      success: true,
+      card_number_masked: maskCardNumber(card_number.slice(-4)),
+      expected_cvc: expectedCVC,
+      note: "DEMO ONLY - This endpoint would not exist in production!"
+    });
+
+  } catch (err) {
+    console.error("GET TEST CVC ERROR:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
