@@ -1,6 +1,6 @@
 // ============================================================================
 // cartController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Shopping cart controller - handles all cart operations

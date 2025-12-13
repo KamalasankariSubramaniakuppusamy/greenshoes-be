@@ -1,6 +1,6 @@
 // ============================================================================
 // seedColors.js
-// Developer: Kamala 
+// Developer: GreenShoes Team
 // ============================================================================
 // Scans product image filenames to extract colors and seeds them into the DB
 // Run this after adding product images: node scripts/seedColors.js

@@ -1,6 +1,6 @@
 // ============================================================================
 // RBAC for security testing - protected test route
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 // Test/debug routes - just for verifying things work during development
 // Can probably delete this in production, but harmless to keep

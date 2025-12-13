@@ -1,6 +1,6 @@
 // ============================================================================
 // addressController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Controller for managing user addresses (shipping/billing)

@@ -1,6 +1,6 @@
 -- ============================================================================
 -- GreenShoes E-Commerce Platform - Complete Database Schema
--- Developer: Kamalasankari Subramaniakuppusamy
+-- Developer: GreenShoes Team
 -- ============================================================================
 --
 -- NOTES TO SELF AND FOR REVIEWERS TO UNDERSTAND WHY THINGS ARE WRITTEN A CERTAIN WAY

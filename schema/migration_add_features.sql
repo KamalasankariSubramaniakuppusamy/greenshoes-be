@@ -1,6 +1,6 @@
 -- ============================================================================
 -- GreenShoes Database Migration - Add Missing Features
--- Developer: Kamalasankari Subramaniakuppusamy
+-- Developer: GreenShoes Team
 -- ============================================================================
 --
 -- PURPOSE: Adds new features to an existing database WITHOUT destroying data

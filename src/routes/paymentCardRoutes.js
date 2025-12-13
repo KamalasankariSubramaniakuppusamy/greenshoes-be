@@ -1,6 +1,6 @@
 // ============================================================================
 // paymentCardRoutes.js
-// Developer: Kamalasankari Subramaniakuppusamy  
+// Developer:  GreenShoes Team
 // ============================================================================
 // Saved payment card management for registered users
 // Guests can't save cards - they enter card info fresh each checkout

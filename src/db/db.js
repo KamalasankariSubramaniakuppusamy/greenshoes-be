@@ -1,5 +1,5 @@
 // ============================================================================
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Database query wrapper - thin abstraction layer over pg pool

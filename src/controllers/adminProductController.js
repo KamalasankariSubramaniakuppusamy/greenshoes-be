@@ -1,6 +1,6 @@
 // ============================================================================
 // productController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Controller for admin product management - the heart of the admin panel

@@ -1,6 +1,6 @@
 // ============================================================================
 // checkoutController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Checkout controller - handles the complete order placement flow

@@ -1,6 +1,6 @@
 // ============================================================================
 // catalogController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Public catalog controller - customer-facing product browsing

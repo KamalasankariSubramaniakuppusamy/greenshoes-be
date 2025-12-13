@@ -1,6 +1,6 @@
 // ============================================================================
 // Seeding Admin (only one for this website)
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 // One-time script to create the initial admin user
 // Run this after setting up the database: node scripts/seedAdmin.js

@@ -17,7 +17,7 @@
     "backend",
     "express"
   ],
-  "author": "Kamalasankari Subramaniakuppusamy",
+  "author": "GreenShoes Team",
   "license": "MIT",
   "dependencies": {
     "bcrypt": "^6.0.0",

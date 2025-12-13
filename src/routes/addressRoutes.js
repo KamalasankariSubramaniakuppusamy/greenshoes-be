@@ -1,6 +1,6 @@
 // ============================================================================
 // addressRoutes.js
-// Developer: Kamala
+// Developer:  GreenShoes Team
 // ============================================================================
 // User address management routes (shipping and billing addresses)
 // All routes require authentication - users can only manage their own addresses

@@ -1,6 +1,6 @@
 // ============================================================================
 // config.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Central configuration file - all environment variables exported from here

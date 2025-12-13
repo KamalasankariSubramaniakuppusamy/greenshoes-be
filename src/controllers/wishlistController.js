@@ -1,6 +1,6 @@
 // ============================================================================
 // wishlistController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Wishlist controller - "Save for later" functionality

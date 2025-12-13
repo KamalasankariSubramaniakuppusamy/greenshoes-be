@@ -1,6 +1,6 @@
 // ============================================================================
 // notFound.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer:  GreenShoes Team
 // ============================================================================
 // 404 handler - catches requests that don't match any route
 //

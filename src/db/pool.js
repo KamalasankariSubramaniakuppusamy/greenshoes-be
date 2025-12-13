@@ -1,6 +1,6 @@
 // ============================================================================
 // pool.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // PostgreSQL connection pool configuration

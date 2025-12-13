@@ -1,6 +1,6 @@
 // ============================================================================
 // authController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Authentication controller - handles user registration and login

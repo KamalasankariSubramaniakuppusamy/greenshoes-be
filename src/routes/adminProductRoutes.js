@@ -1,6 +1,6 @@
 // ============================================================================
 // adminProductRoutes.js
-// Developer: Kamala
+// Developer: GreenShoes Team
 // ============================================================================
 // Admin product management routes - the heart of the admin panel
 // Handles all CRUD operations for products, inventory, sales, and impact data

@@ -1,6 +1,6 @@
 // ============================================================================
 // paymentCardController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer:  GreenShoes Team
 // ============================================================================
 //
 // Payment card management controller - handles saved cards and payment processing

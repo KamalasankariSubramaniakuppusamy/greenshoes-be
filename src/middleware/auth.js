@@ -1,6 +1,6 @@
 // ============================================================================
 // authMiddleware.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Authentication and authorization middleware

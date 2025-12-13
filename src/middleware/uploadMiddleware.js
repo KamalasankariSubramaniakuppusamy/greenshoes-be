@@ -1,5 +1,5 @@
 // ============================================================================
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 // File upload handling using Multer
 // Used for product images in the admin panel

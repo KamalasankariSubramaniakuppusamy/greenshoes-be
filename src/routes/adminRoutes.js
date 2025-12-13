@@ -1,6 +1,4 @@
 // ============================================================================
-// Developer: Kamalasankari
-// ============================================================================
 // Admin routes - mostly deprecated in favor of separate route files
 //
 // This file used to have all admin routes but we split them out:

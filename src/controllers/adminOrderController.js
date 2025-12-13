@@ -1,6 +1,6 @@
 // ============================================================================
 // orderController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Controller for order management - primarily admin-facing

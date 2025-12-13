@@ -1,4 +1,4 @@
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // Basic server health check test - makes sure the server is alive and responding
 //
 // Why health checks matter:

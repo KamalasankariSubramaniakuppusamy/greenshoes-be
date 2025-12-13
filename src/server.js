@@ -1,6 +1,6 @@
 // This is the obvious– I set up the server to include all the new routes
 // for addresses, payment cards, checkout, orders, and admin order management.
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 
 // ============================================================================
 // server.js

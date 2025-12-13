@@ -1,6 +1,6 @@
 // ============================================================================
 // customerOrderController.js
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // ============================================================================
 //
 // Customer-facing order controller - handles order history and reordering

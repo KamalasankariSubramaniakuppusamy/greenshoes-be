@@ -1,4 +1,4 @@
-// Developer: Kamalasankari Subramaniakuppusamy
+// Developer: GreenShoes Team
 // Unit tests for authentication flow - registration and login endpoints
 //
 // REQUIREMENTS TESTED:
