@@ -1,7 +1,7 @@
 import { query } from "../db/db.js";
 
 async function fixImagePaths() {
-  console.log("🔧 Fixing broken image paths...\n");
+  console.log("Fixing broken image paths...\n");
 
   // Get all product images with broken paths (starting with /images/17...)
   const brokenImages = await query(`
@@ -33,11 +33,11 @@ async function fixImagePaths() {
     await query(`UPDATE product_images SET image_url = $1 WHERE id = $2`, [newPath, img.id]);
   }
 
-  console.log("✅ Image paths fixed!");
+  console.log("Image paths fixed!");
   process.exit(0);
 }
 
 fixImagePaths().catch((err) => {
-  console.error("❌ Fix failed:", err);
+  console.error("Fix failed:", err);
   process.exit(1);
 });

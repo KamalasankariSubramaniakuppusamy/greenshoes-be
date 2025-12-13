@@ -1,3 +1,18 @@
+// This is the obvious– I set up the server to include all the new routes
+// for addresses, payment cards, checkout, orders, and admin order management.
+// Developer: Kamalasankari Subramaniakuppusamy
+
+// ============================================================================
+// server.js
+// ============================================================================
+// Main server entry point - sets up Express app, middleware, and routes
+// Centralized configuration for all API endpoints and global middleware
+
+// I'm not commenting every single line here since it's mostly standard 
+// Express setup, but I've added comments around the new sections I included.
+// The commenting style may sometimes be inconsistent with some comments 
+// being more sparse, and the others having neat lines drawn around them.
+
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";

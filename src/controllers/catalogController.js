@@ -1,11 +1,54 @@
+// ============================================================================
+// catalogController.js
+// Developer: Kamalasankari Subramaniakuppusamy
+// ============================================================================
+//
+// Public catalog controller - customer-facing product browsing
+// No authentication required - anyone can browse the catalog
+//
+// REQUIREMENTS COVERED:
+// - "Display color/size options with multiple images"
+// - "Place items on sale" (sale items emphasized, shown first)
+// - "Impact management" (environmental_impact in product details)
+// - "Inventory can never be negative" (stock status alerts)
+// - "Update inventory real-time" (live stock counts in responses)
+//
+// KEY FEATURES:
+// - Dynamic filtering (category, search, price range, on sale)
+// - Sorting options (date, name, price)
+// - Sale items prioritized by default
+// - Per-variant stock alerts ("Only 3 left in Blue Size 8!")
+// - Environmental impact storytelling for eco-friendly branding
+//
+// ROUTES THAT USE THIS:
+// - GET /api/products           → getFullCatalog
+// - GET /api/products/:productId → getProductById
+//
+// ============================================================================
+
 import { query } from "../db/db.js";
 
-// ---------------------------------------------------
-// GET FULL CATALOG (with search, filters, emphasis on sale)
-// Now includes per-variant stock status alerts
-// ---------------------------------------------------
+
+// ============================================================================
+// GET FULL CATALOG
+// Main product listing with search, filters, and stock alerts
+// ============================================================================
+//
+// Query Parameters:
+// - category: Filter by product category (e.g., "sandals", "sneakers")
+// - search: Search in name and description (case-insensitive)
+// - minPrice: Minimum price filter (uses effective price - sale or regular)
+// - maxPrice: Maximum price filter
+// - onSale: If 'true', only show items currently on sale
+// - sortBy: 'created_at' (default), 'name', or 'selling_price'
+// - sortOrder: 'ASC' or 'DESC' (default)
+//
+// Special behavior: When no sortBy specified, sale items appear FIRST
+// This emphasizes discounts and helps move sale inventory
+//
 export const getFullCatalog = async (req, res) => {
   try {
+    // ---------- EXTRACT QUERY PARAMETERS ----------
     const {
       category,
       search,
@@ -16,7 +59,13 @@ export const getFullCatalog = async (req, res) => {
       sortOrder = 'DESC'
     } = req.query;
 
-    // Build dynamic query with filters
+    // ---------- BUILD DYNAMIC SQL QUERY ----------
+    // This query does a LOT of work in one go:
+    // - Joins products with inventory for stock status
+    // - Calculates effective price (sale or regular)
+    // - Calculates discount percentage for sale items
+    // - Gets main product image
+    // - Determines overall stock status (out_of_stock, running_out, in_stock)
     let queryText = `
       SELECT DISTINCT
         p.id,
@@ -53,25 +102,32 @@ export const getFullCatalog = async (req, res) => {
       LEFT JOIN inventory inv ON inv.product_id = p.id
       WHERE 1=1
     `;
+    // Note: "WHERE 1=1" is a common pattern for dynamic query building
+    // It lets us append "AND ..." clauses without checking if WHERE exists
 
+    // Dynamic parameter handling for prepared statements
     const params = [];
     let paramIndex = 1;
 
-    // Filter by category
+    // ---------- APPLY FILTERS ----------
+
+    // Filter by category (exact match)
     if (category) {
       queryText += ` AND p.category = $${paramIndex}`;
       params.push(category);
       paramIndex++;
     }
 
-    // Search by name or description
+    // Search by name OR description (case-insensitive with ILIKE)
+    // ILIKE is PostgreSQL's case-insensitive LIKE
     if (search) {
       queryText += ` AND (p.name ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex})`;
-      params.push(`%${search}%`);
+      params.push(`%${search}%`);  // % wildcards for partial match
       paramIndex++;
     }
 
-    // Filter by price range
+    // Price range filters
+    // Uses COALESCE to compare against effective price (sale_price if on sale, else selling_price)
     if (minPrice) {
       queryText += ` AND COALESCE(p.sale_price, p.selling_price) >= $${paramIndex}`;
       params.push(parseFloat(minPrice));
@@ -84,27 +140,34 @@ export const getFullCatalog = async (req, res) => {
       paramIndex++;
     }
 
-    // Filter by on sale items
+    // Filter to show only sale items
+    // REQUIREMENT: "Place items on sale" - customers can filter to see deals
     if (onSale === 'true') {
       queryText += ` AND p.on_sale = TRUE`;
     }
 
+    // GROUP BY needed because we're using SUM(inv.quantity) in SELECT
     queryText += ` GROUP BY p.id`;
 
-    // Sorting
+    // ---------- APPLY SORTING ----------
+    // Whitelist allowed sort fields to prevent SQL injection
     const allowedSortFields = ['created_at', 'name', 'selling_price'];
     const allowedSortOrders = ['ASC', 'DESC'];
     
     const finalSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'created_at';
     const finalSortOrder = allowedSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
 
+    // Special handling for price sort - use effective_price (respects sale prices)
     if (finalSortBy === 'selling_price') {
       queryText += ` ORDER BY effective_price ${finalSortOrder}`;
     } else {
       queryText += ` ORDER BY p.${finalSortBy} ${finalSortOrder}`;
     }
 
-    // Show sale items FIRST by default
+    // ---------- DEFAULT: SALE ITEMS FIRST ----------
+    // When no explicit sortBy is requested, show sale items at the top
+    // This helps promote deals and move sale inventory
+    // We wrap the entire query and re-sort by on_sale DESC
     if (!req.query.sortBy) {
       queryText = `
         SELECT * FROM (${queryText}) as sorted_products
@@ -112,12 +175,16 @@ export const getFullCatalog = async (req, res) => {
       `;
     }
 
+    // Execute the main product query
     const products = await query(queryText, params);
 
-    // Get colors, sizes, images, and STOCK ALERTS for each product
+    // ---------- ENHANCE EACH PRODUCT WITH ADDITIONAL DATA ----------
+    // For each product, fetch colors, sizes, images, and stock alerts
+    // Yes, this is N+1 queries - could optimize but readability > performance here
     const catalog = [];
 
     for (const p of products.rows) {
+      // Get all available colors for this product
       const colors = await query(
         `SELECT c.id, c.value 
          FROM product_colors pc
@@ -126,6 +193,8 @@ export const getFullCatalog = async (req, res) => {
         [p.id]
       );
 
+      // Get all images (multiple angles/views per product)
+      // REQUIREMENT: "Display color/size options with multiple images"
       const images = await query(
         `SELECT image_url, color_id, priority
          FROM product_images
@@ -134,6 +203,8 @@ export const getFullCatalog = async (req, res) => {
         [p.id]
       );
 
+      // Get available sizes (only those with stock > 0)
+      // This prevents showing "Size 12" when it's actually sold out
       const sizes = await query(
         `SELECT DISTINCT s.value, s.id
          FROM inventory i
@@ -143,7 +214,11 @@ export const getFullCatalog = async (req, res) => {
         [p.id]
       );
 
-      // NEW: Get per-variant stock status for alerts
+      // ---------- BUILD STOCK ALERTS ----------
+      // This is a nice UX feature - shows "Only 3 left!" type messages
+      // Creates urgency and helps customers know what's running low
+      
+      // Get per-variant stock status
       const variantStock = await query(
         `SELECT 
           c.value as color,
@@ -161,8 +236,9 @@ export const getFullCatalog = async (req, res) => {
          ORDER BY c.value, s.value::float`,
         [p.id]
       );
+      // Note: s.value::float sorts sizes numerically (7, 8, 9) not alphabetically (10, 7, 8, 9)
 
-      // Build stock alerts array
+      // Categorize variants by stock status
       const stockAlerts = [];
       const runningOutVariants = [];
       const outOfStockVariants = [];
@@ -183,9 +259,12 @@ export const getFullCatalog = async (req, res) => {
         }
       }
 
-      // Create human-readable alerts
+      // Create human-readable alert messages
+      // If only 1-2 variants affected, list them specifically
+      // If many variants affected, just show a count
       if (outOfStockVariants.length > 0) {
         if (outOfStockVariants.length <= 2) {
+          // Specific messages: "Blue Size 8 - Out of Stock"
           outOfStockVariants.forEach(v => {
             stockAlerts.push({
               type: 'out_of_stock',
@@ -195,6 +274,7 @@ export const getFullCatalog = async (req, res) => {
             });
           });
         } else {
+          // Summary message: "5 variants out of stock"
           stockAlerts.push({
             type: 'out_of_stock',
             message: `${outOfStockVariants.length} variants out of stock`,
@@ -203,6 +283,8 @@ export const getFullCatalog = async (req, res) => {
         }
       }
 
+      // "Running out" alerts - creates urgency!
+      // "Only 3 left in Blue Size 8!"
       if (runningOutVariants.length > 0) {
         if (runningOutVariants.length <= 2) {
           runningOutVariants.forEach(v => {
@@ -223,6 +305,7 @@ export const getFullCatalog = async (req, res) => {
         }
       }
 
+      // Build the final product object for the catalog
       catalog.push({
         ...p,
         colors: colors.rows,
@@ -234,6 +317,8 @@ export const getFullCatalog = async (req, res) => {
       });
     }
 
+    // Return catalog with applied filters info
+    // Frontend can use filters_applied to show active filter badges
     return res.json({
       success: true,
       products: catalog,
@@ -252,14 +337,30 @@ export const getFullCatalog = async (req, res) => {
   }
 };
 
-// ---------------------------------------------------
+
+// ============================================================================
 // GET SINGLE PRODUCT BY ID
-// ---------------------------------------------------
+// Full product details for Product Detail Page (PDP)
+// ============================================================================
+//
+// Returns everything needed for the product page:
+// - Product info with pricing (including sale calculations)
+// - All colors with their thumbnail images
+// - All product images from multiple angles
+// - Full inventory matrix (every color/size combo with stock)
+// - Environmental impact story (for eco-friendly branding)
+//
+// REQUIREMENTS:
+// - "Display color/size options with multiple images"
+// - "Impact management" (environmental storytelling)
+//
 export const getProductById = async (req, res) => {
   try {
     const { productId } = req.params;
 
-    // Get product details with sale price calculation
+    // ---------- GET PRODUCT WITH PRICE CALCULATIONS ----------
+    // Calculates effective_price and discount_percentage in SQL
+    // So frontend doesn't have to do the math
     const product = await query(
       `SELECT 
         p.*,
@@ -284,7 +385,9 @@ export const getProductById = async (req, res) => {
 
     const productData = product.rows[0];
 
-    // Get all colors for this product
+    // ---------- GET COLORS WITH SWATCH IMAGES ----------
+    // Each color gets a thumbnail image for the color selector
+    // Subquery grabs the first image for each color variant
     const colors = await query(
       `SELECT DISTINCT 
         c.id,
@@ -299,7 +402,10 @@ export const getProductById = async (req, res) => {
       [productId]
     );
 
-    // Multiple photos from different angles/colors
+    // ---------- GET ALL PRODUCT IMAGES ----------
+    // REQUIREMENT: "Display color/size options with multiple images"
+    // Multiple photos from different angles and colors
+    // Ordered by priority (model shots first) then by color
     const images = await query(
       `SELECT 
         pi.id,
@@ -314,8 +420,15 @@ export const getProductById = async (req, res) => {
        ORDER BY pi.priority ASC, c.value`,
       [productId]
     );
+    // LEFT JOIN colors because some images might not be color-specific
+    // (e.g., lifestyle shots that apply to all variants)
 
-    // Display sizes and colors with availability
+    // ---------- GET FULL INVENTORY MATRIX ----------
+    // Every color/size combination with current stock quantity
+    // Frontend uses this to:
+    // - Show which sizes are available for selected color
+    // - Disable/gray out out-of-stock options
+    // - Show "Only 3 left" warnings
     const inventory = await query(
       `SELECT 
         inv.id as inventory_id,
@@ -332,21 +445,25 @@ export const getProductById = async (req, res) => {
       [productId]
     );
 
-    // Display environmental impact information and storytelling
+    // ---------- BUILD ENVIRONMENTAL IMPACT OBJECT ----------
+    // REQUIREMENT: "Impact management"
+    // This is the eco-friendly storytelling that supports
+    // the "SCULPTED BY THE SEA" luxury sustainable branding
     const environmentalImpact = {
-      story: productData.impact_story,
-      sustainability_rating: productData.sustainability_rating,
-      carbon_footprint: productData.carbon_footprint,
-      ethical_sourcing: productData.ethical_sourcing,
-      recycled_materials: productData.recycled_materials
+      story: productData.impact_story,              // The sustainability narrative
+      sustainability_rating: productData.sustainability_rating,  // 1-5 stars
+      carbon_footprint: productData.carbon_footprint,  // e.g., "2.3 kg CO2 saved"
+      ethical_sourcing: productData.ethical_sourcing,  // Where materials come from
+      recycled_materials: productData.recycled_materials  // Boolean
     };
 
+    // Return everything the Product Detail Page needs
     return res.json({
       success: true,
       product: productData,
       colors: colors.rows,
       images: images.rows,
-      sizes: inventory.rows,
+      sizes: inventory.rows,  // Full inventory matrix
       environmental_impact: environmentalImpact
     });
 
@@ -355,3 +472,42 @@ export const getProductById = async (req, res) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+
+
+// ============================================================================
+// NOTES & POTENTIAL IMPROVEMENTS
+// ============================================================================
+//
+// 1. Pagination
+//    Currently returns ALL products - will be slow with large catalogs
+//    Should add: ?page=1&limit=20
+//    Return: { products, total_count, page, total_pages }
+//
+// 2. Query optimization
+//    The N+1 queries in getFullCatalog could be optimized:
+//    - Use JOINs with array_agg() for colors/sizes in one query
+//    - Or batch fetch all colors/sizes and map in JavaScript
+//    Current approach is readable but won't scale to 10,000+ products
+//
+// 3. Caching
+//    Catalog doesn't change often - could cache for 5-10 minutes
+//    Redis or even in-memory cache would help
+//    Invalidate cache when products are updated
+//
+// 4. Elasticsearch
+//    For better search (fuzzy matching, typo tolerance, faceted search)
+//    Current ILIKE search is basic but works for small catalogs
+//
+// 5. More filters
+//    Could add: color filter, size filter, in-stock-only filter
+//    Also: brand filter (if multi-brand), material filter
+//
+// 6. Related products
+//    getProductById could return related products
+//    "You might also like..." based on category or purchase history
+//
+// 7. Recently viewed
+//    Track what products user has viewed
+//    Show in "Recently Viewed" section (requires session/auth)
+//
+// ============================================================================

@@ -1,25 +1,69 @@
+// ============================================================================
+// customerOrderController.js
+// Developer: Kamalasankari Subramaniakuppusamy
+// ============================================================================
+//
+// Customer-facing order controller - handles order history and reordering
+// For REGISTERED USERS ONLY (requires authentication)
+//
+// REQUIREMENTS COVERED:
+// - "Display unique confirmation ID per order" (order_number in responses)
+// - "Display order ID, color, size, addresses, total" (getOrderDetails)
+// - "Tax 6% per product" (shown in price_breakdown)
+// - "Flat shipping $11.95" (shown in price_breakdown)
+// - Separate billing and shipping addresses
+//
+// DIFFERENCE FROM orderController.js:
+// - orderController.js = ADMIN view (sees ALL orders)
+// - customerOrderController.js = CUSTOMER view (sees only THEIR orders)
+//
+// ROUTES THAT USE THIS:
+// - GET  /api/orders           → getOrderHistory (list all user's orders)
+// - GET  /api/orders/:orderId  → getOrderDetails (single order details)
+// - POST /api/orders/:orderId/reorder → reorder (add previous order items to cart)
+//
+// ============================================================================
+
 import { query } from "../db/db.js";
 
-// ---------------------------------------------------
-// Helper: Calculate delivery date
-// ---------------------------------------------------
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Calculate Delivery Date
+// Adds 7 days to order date for estimated delivery
+// ----------------------------------------------------------------------------
 function calculateDeliveryDate(orderDate) {
   const deliveryDate = new Date(orderDate);
   deliveryDate.setDate(deliveryDate.getDate() + 7);
   
   return {
-    date: deliveryDate.toISOString().split('T')[0],
+    date: deliveryDate.toISOString().split('T')[0],  // Format: YYYY-MM-DD
     message: "Your order will arrive in 7 days"
   };
 }
+// Note: Same function exists in checkoutController.js - could be shared
+// But keeping it here for controller independence
 
-// ---------------------------------------------------
-// GET ORDER HISTORY (registered users only)
-// ---------------------------------------------------
+
+// ============================================================================
+// GET ORDER HISTORY
+// Returns list of all orders for the logged-in user
+// ============================================================================
+//
+// For the "My Orders" page in customer account
+// Shows order summary with item count, not full item details
+// User clicks an order to see full details via getOrderDetails
+//
 export const getOrderHistory = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.id;  // From auth middleware
 
+    // ---------- FETCH ALL ORDERS FOR THIS USER ----------
+    // Include shipping address summary and item count
+    // Ordered by newest first (most recent orders at top)
     const orders = await query(
       `SELECT 
         o.id,
@@ -40,11 +84,17 @@ export const getOrderHistory = async (req, res) => {
        ORDER BY o.created_at DESC`,
       [userId]
     );
+    // Subquery for items_count is convenient but could be optimized
+    // with a JOIN + GROUP BY for large order volumes
 
-    // Get items for each order
+    // ---------- ENHANCE EACH ORDER WITH ITEMS ----------
+    // For each order, fetch the actual items (name, color, size, image)
+    // This powers the order card preview in the UI
     const ordersWithItems = [];
 
     for (const order of orders.rows) {
+      // Get items for this order
+      // REQUIREMENT: "Display order ID, color, size, addresses, total"
       const items = await query(
         `SELECT 
           oi.quantity,
@@ -64,6 +114,7 @@ export const getOrderHistory = async (req, res) => {
         [order.id]
       );
 
+      // Calculate delivery estimate based on order date
       const delivery = calculateDeliveryDate(order.created_at);
 
       ordersWithItems.push({
@@ -72,6 +123,9 @@ export const getOrderHistory = async (req, res) => {
         items: items.rows
       });
     }
+    // Note: This is an N+1 query pattern - one query per order
+    // For users with many orders, could optimize with single query using array_agg()
+    // But for typical user (5-20 orders), this is fine
 
     return res.json({
       success: true,
@@ -84,15 +138,24 @@ export const getOrderHistory = async (req, res) => {
   }
 };
 
-// ---------------------------------------------------
-// GET SINGLE ORDER DETAILS (WITH BILLING ADDRESS)
-// ---------------------------------------------------
+
+// ============================================================================
+// GET SINGLE ORDER DETAILS
+// Returns complete details for one order
+// REQUIREMENT: "Display order ID, color, size, addresses, total"
+// ============================================================================
+//
+// For the order detail page when customer clicks on an order
+// Includes everything: items, payment info, both addresses, price breakdown
+//
 export const getOrderDetails = async (req, res) => {
   try {
     const userId = req.user.id;
     const { orderId } = req.params;
 
-    // Get order with BOTH shipping and billing addresses
+    // ---------- FETCH ORDER WITH BOTH ADDRESSES ----------
+    // Security: WHERE clause includes user_id to prevent accessing other users' orders
+    // Even if someone guesses an order ID, they can only see their own orders
     const order = await query(
       `SELECT 
         o.*,
@@ -116,14 +179,18 @@ export const getOrderDetails = async (req, res) => {
        WHERE o.id=$1 AND o.user_id=$2`,
       [orderId, userId]
     );
+    // Using aliases: sa = shipping address, ba = billing address
 
+    // Order not found OR doesn't belong to this user
+    // Return same error for both (don't leak info about other orders)
     if (order.rows.length === 0) {
       return res.status(404).json({ error: "Order not found" });
     }
 
     const orderData = order.rows[0];
 
-    // Get order items
+    // ---------- FETCH ORDER ITEMS ----------
+    // Get all line items with product details, color, size, image
     const items = await query(
       `SELECT 
         oi.quantity,
@@ -144,14 +211,15 @@ export const getOrderDetails = async (req, res) => {
        WHERE oi.order_id=$1`,
       [orderId]
     );
+    // product_id and inventory_id are included for reorder functionality
 
-    // Calculate item subtotals
+    // Calculate subtotal for each line item (price × quantity)
     const itemsWithSubtotals = items.rows.map(item => ({
       ...item,
       subtotal: (parseFloat(item.price) * item.quantity).toFixed(2)
     }));
 
-    // Get payment info
+    // ---------- FETCH PAYMENT INFO ----------
     const payment = await query(
       `SELECT transaction_id, created_at
        FROM payments
@@ -159,12 +227,16 @@ export const getOrderDetails = async (req, res) => {
       [orderId]
     );
 
-    // Calculate delivery date
+    // Calculate delivery estimate
     const delivery = calculateDeliveryDate(orderData.created_at);
 
+    // ---------- BUILD RESPONSE ----------
+    // Structured response with all the info customer wants to see
     return res.json({
       success: true,
       order: {
+        // Order identification
+        // REQUIREMENT: "Display unique confirmation ID per order"
         order_id: orderData.id,
         order_number: orderData.order_number,
         order_date: orderData.created_at,
@@ -172,14 +244,19 @@ export const getOrderDetails = async (req, res) => {
         estimated_delivery: delivery.date,
         estimated_delivery_message: delivery.message,
         
+        // Line items with color, size, price
+        // REQUIREMENT: "Display order ID, color, size, addresses, total"
         items: itemsWithSubtotals,
         
+        // Payment info
         payment: {
           transaction_id: payment.rows[0]?.transaction_id,
           payment_date: payment.rows[0]?.created_at,
           payment_method: orderData.payment_method
         },
         
+        // Price breakdown
+        // REQUIREMENT: "Tax 6% per product", "Flat shipping $11.95"
         price_breakdown: {
           subtotal: orderData.subtotal,
           tax: orderData.tax,
@@ -187,6 +264,7 @@ export const getOrderDetails = async (req, res) => {
           total: orderData.total_amount
         },
         
+        // Shipping address
         shipping_address: {
           full_name: orderData.shipping_name,
           phone: orderData.shipping_phone,
@@ -198,7 +276,8 @@ export const getOrderDetails = async (req, res) => {
           country: orderData.shipping_country
         },
 
-        // REQUIREMENT: Show billing address separately
+        // Billing address (falls back to shipping if same)
+        // REQUIREMENT: Separate billing address display
         billing_address: {
           full_name: orderData.billing_name || orderData.shipping_name,
           address1: orderData.billing_address1 || orderData.shipping_address1,
@@ -216,15 +295,27 @@ export const getOrderDetails = async (req, res) => {
   }
 };
 
-// ---------------------------------------------------
-// REORDER (add all items from previous order to cart)
-// ---------------------------------------------------
+
+// ============================================================================
+// REORDER
+// Adds all items from a previous order to the customer's cart
+// ============================================================================
+//
+// Nice UX feature - "Buy it again" functionality
+// Customer clicks "Reorder" on a past order, items get added to cart
+//
+// Handles edge cases:
+// - Items that are now out of stock (skip them, report back)
+// - Items already in cart (increase quantity instead of duplicate)
+// - Product no longer exists (skip it)
+//
 export const reorder = async (req, res) => {
   try {
     const userId = req.user.id;
     const { orderId } = req.params;
 
-    // Verify order belongs to user
+    // ---------- VERIFY ORDER BELONGS TO USER ----------
+    // Security: Can't reorder someone else's order
     const order = await query(
       `SELECT id FROM orders WHERE id=$1 AND user_id=$2`,
       [orderId, userId]
@@ -234,7 +325,7 @@ export const reorder = async (req, res) => {
       return res.status(404).json({ error: "Order not found" });
     }
 
-    // Get order items
+    // ---------- GET ITEMS FROM ORIGINAL ORDER ----------
     const items = await query(
       `SELECT product_id, inventory_id, quantity
        FROM order_items
@@ -246,7 +337,8 @@ export const reorder = async (req, res) => {
       return res.status(400).json({ error: "Order has no items" });
     }
 
-    // Get or create user cart
+    // ---------- GET OR CREATE USER'S CART ----------
+    // Same pattern as cartController - ensure cart exists
     let cart = await query(
       `SELECT id FROM carts WHERE user_id=$1`,
       [userId]
@@ -254,6 +346,7 @@ export const reorder = async (req, res) => {
 
     let cartId;
     if (cart.rows.length === 0) {
+      // No cart exists, create one
       const newCart = await query(
         `INSERT INTO carts (user_id) VALUES ($1) RETURNING id`,
         [userId]
@@ -263,18 +356,22 @@ export const reorder = async (req, res) => {
       cartId = cart.rows[0].id;
     }
 
-    // Add items to cart
+    // ---------- ADD ITEMS TO CART ----------
     let addedCount = 0;
     let outOfStockItems = [];
 
     for (const item of items.rows) {
-      // Check if item still has stock
+      // Check if item still has sufficient stock
+      // REQUIREMENT: "Inventory can never be negative"
+      // We need to verify stock before adding to cart
       const inventory = await query(
         `SELECT quantity FROM inventory WHERE id=$1`,
         [item.inventory_id]
       );
 
+      // Skip if inventory doesn't exist or insufficient stock
       if (inventory.rows.length === 0 || inventory.rows[0].quantity < item.quantity) {
+        // Get product info for the "out of stock" report
         const product = await query(
           `SELECT p.name, c.value as color, s.value as size
            FROM products p
@@ -285,15 +382,16 @@ export const reorder = async (req, res) => {
           [item.product_id, item.inventory_id]
         );
         
+        // Add to out-of-stock list to report back to customer
         outOfStockItems.push({
           name: product.rows[0]?.name,
           color: product.rows[0]?.color,
           size: product.rows[0]?.size
         });
-        continue;
+        continue;  // Skip this item, move to next
       }
 
-      // Check if item already in cart
+      // Check if this exact variant is already in cart
       const existing = await query(
         `SELECT id, quantity FROM cart_items
          WHERE cart_id=$1 AND product_id=$2 AND inventory_id=$3`,
@@ -301,6 +399,8 @@ export const reorder = async (req, res) => {
       );
 
       if (existing.rows.length > 0) {
+        // Item already in cart - increase quantity
+        // TODO: Should check if combined quantity exceeds available stock
         await query(
           `UPDATE cart_items 
            SET quantity = quantity + $1
@@ -308,6 +408,7 @@ export const reorder = async (req, res) => {
           [item.quantity, existing.rows[0].id]
         );
       } else {
+        // New item - insert into cart
         await query(
           `INSERT INTO cart_items (cart_id, product_id, inventory_id, quantity)
            VALUES ($1, $2, $3, $4)`,
@@ -318,11 +419,12 @@ export const reorder = async (req, res) => {
       addedCount++;
     }
 
+    // Return success with details about what was added (and what wasn't)
     return res.json({
       success: true,
       message: `${addedCount} items added to cart from previous order`,
       added_count: addedCount,
-      out_of_stock: outOfStockItems
+      out_of_stock: outOfStockItems  // Customer can see what wasn't available
     });
 
   } catch (err) {
@@ -330,3 +432,47 @@ export const reorder = async (req, res) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+
+
+// ============================================================================
+// NOTES & POTENTIAL IMPROVEMENTS
+// ============================================================================
+//
+// 1. Order tracking
+//    Currently: Just shows "ORDERED" status and 7-day estimate
+//    Better: Real tracking with carrier integration (UPS, FedEx, USPS)
+//    Would need: tracking_number field, carrier API integration
+//
+// 2. Order status updates
+//    Customers should be notified when status changes
+//    Would need: email/SMS notifications on status update
+//
+// 3. Order cancellation
+//    Currently: "No returns or refunds" per requirements
+//    But could allow cancellation within X hours of order (before shipping)
+//    Would need: cancellation window logic, inventory restoration
+//
+// 4. Guest order lookup
+//    Guests can't use this controller (requires auth)
+//    Could add: /api/orders/lookup?order_number=XXX&email=xxx
+//    For guests to check their order status
+//
+// 5. Pagination for order history
+//    Currently: Returns ALL orders
+//    Better: Paginated: GET /api/orders?page=1&limit=10
+//    For users with many orders over time
+//
+// 6. Order search/filter
+//    Could add: ?status=ORDERED&from=2025-01-01&to=2025-12-31
+//    Filter by date range, status, etc.
+//
+// 7. Reorder improvements
+//    - Check combined quantity against available stock
+//    - Option to reorder with updated quantities
+//    - Handle discontinued products gracefully
+//
+// 8. Invoice/receipt download
+//    Generate PDF invoice for each order
+//    Would need: PDF generation library (puppeteer, pdfkit)
+//
+// ============================================================================
